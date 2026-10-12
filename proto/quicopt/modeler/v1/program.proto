@@ -54,13 +54,16 @@ message Index {
 
 message Expression {
   oneof node {
-    double    constant = 1;  // Const(value) — always emitted (a set oneof case),
-                             //                so Const(0.0) survives the round-trip
-    ParamRef  param    = 2;  // Param(name, index)
-    VarRef    var      = 3;  // Var(name, index)
-    Apply     apply    = 4;  // Apply(op, args)
-    Reduce    reduce   = 5;  // Reduce(op, idx, over, body, cond)
-    SourceRef source   = 6;  // SourceRef(name) — a stochastic source, by name
+    double    constant  = 1;  // Const(value) — always emitted (a set oneof case),
+                              //                so Const(0.0) survives the round-trip
+    ParamRef  param     = 2;  // Param(name, index)
+    VarRef    var       = 3;  // Var(name, index)
+    Apply     apply     = 4;  // Apply(op, args)
+    Reduce    reduce    = 5;  // Reduce(op, idx, over, body, cond)
+    SourceRef source    = 6;  // SourceRef(name) — a stochastic source, by name
+    StructRef structure = 7;  // StructRef(name) — a declared structure, by name
+    TableRef  table     = 8;  // TableRef(param, index) — a data table read at
+                              //   positions given by expressions
   }
 }
 
@@ -73,6 +76,28 @@ message Expression {
 // a stochastic model can never be silently mis-solved as deterministic.
 message SourceRef {
   string name = 1;
+}
+
+// A reference to a declared structure (Program.structures), by name, exactly
+// as SourceRef names a source. It is legal only as the second argument of a
+// part operator (catalog tag struct_part): `item_at(3, tour)` is
+// Apply("item_at", [constant 3, StructRef "tour"]). A server that predates this
+// field rejects any Expression carrying it (an empty oneof).
+message StructRef {
+  string name = 1;
+}
+
+// A declared Param table read at positions given by expressions: one index for
+// a vector table, two for a matrix. Unlike ParamRef, whose index is a fixed
+// coordinate or a bound loop index, the index expressions here may involve
+// decisions, structure parts or random terms, so the entry is read when the
+// model is solved. The table must be dense on the integer keys 1..a (one
+// index) or 1..a by 1..b (two). An index value that is not an integer in range
+// is rounded to the nearest integer and clamped into range, and a NaN index
+// reads position 1.
+message TableRef {
+  string              param = 1;
+  repeated Expression index = 2;  // one or two
 }
 
 message ParamRef {
@@ -247,6 +272,38 @@ message SourceDecl {
 }
 
 // ---------------------------------------------------------------------------
+// Structured decision variables — named declarations, referenced by StructRef
+//
+// A structure is a decision variable with a shape every candidate solution
+// keeps: a permutation of n items over n slots, say. It is declared once under
+// a name, like a source, and its parts are read in expressions through catalog
+// operators tagged struct_part applied to a StructRef: `item_at(slot, P)` is
+// the item in a slot and `slot_of(item, P)` the slot of an item, both
+// decision-valued integers in 1..n. The kind is a catalog key (tag structure),
+// so a later kind is a catalog entry, not a schema change; kinds that do not
+// use a field leave it empty.
+// ---------------------------------------------------------------------------
+
+// One precedence of a permutation: item `before` sits in an earlier slot than
+// item `after` in every arrangement considered.
+message Precedence {
+  uint64 before = 1;  // items, 1-based
+  uint64 after  = 2;
+}
+
+// One named structure declaration.
+message StructureDecl {
+  string            name    = 1;  // "tour"
+  string            kind    = 2;  // "permutation"
+  uint64            size    = 3;  // n >= 2: items 1..n, slots 1..n
+  repeated int64    start   = 4;  // empty, or start[i] = the starting slot of
+                                  // item i (a permutation of 1..n)
+  bool              fixed   = 5;  // pinned at `start`, which must then be full:
+                                  // how a solution is re-evaluated
+  repeated Precedence precede = 6;
+}
+
+// ---------------------------------------------------------------------------
 // Program — the structured authoring container (what crosses the wire)
 // ---------------------------------------------------------------------------
 
@@ -270,6 +327,12 @@ message Program {
   uint64              scenarios     = 9;   // number of scenarios in the sampled instance
   uint64              scenario_seed = 10;  // base-draw seed
   repeated SourceDecl sources       = 11;  // canonical order: sorted by name
+
+  // Structured variables (absent ⇒ none; a Program without them encodes
+  // identically with or without this field). Canonical order: sorted by name.
+  // A model that uses one carries a StructRef, which an old server rejects, so
+  // it is never mis-solved as a plain model.
+  repeated StructureDecl structures = 12;
 }
 
 // ---------------------------------------------------------------------------
