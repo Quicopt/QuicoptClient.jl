@@ -68,6 +68,31 @@ a deterministic model built on a best guess throws away. See
 [Modeling](@ref) for the full surface: `expectation`, `cvar` for tail risk, and
 `prob` for chance constraints.
 
+## Deciding an order
+
+Some decisions are an arrangement: the order in which a courier visits its stops,
+the order of jobs on a machine. Declare one with `permutation`, read it with
+`item_at` and `slot_of`, and read data along it from a `lookup_table`:
+
+```julia
+position = [0, 3, 1, 4, 2]                        # km along the road, stops 1 to 5
+m = Model()
+dist  = lookup_table(m, :dist, [abs(a - b) for a in position, b in position])
+route = permutation(m, :route, 5)                 # 5 stops in 5 visits
+precede!(route, 4, 1)                             # stop 4 is visited before stop 1
+@objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
+
+result = solve(m)
+result.objective                                  # 4.0
+result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in visiting order
+```
+
+`item_at(k, route)` is the stop visited `k`-th and `slot_of(i, route)` the visit
+at which stop `i` comes; both are chosen by the service. Indexing `dist` with them
+reads the distance between the stops it chooses. Driving from one end of the road
+to the other covers the 4 km, and starting at the far end is what visits stop 4
+before stop 1.
+
 ## What travels
 
 A `Program` is what a model *is* to Quicopt — variables, expressions and
@@ -84,8 +109,9 @@ equivalence, and it is why you compare decoded `Program`s, never raw bytes.
 ## API reference
 
 - [Modeling](@ref) — `import_model`, `encode`: JuMP model → `Program` → bytes;
-  and `set_distribution`, `expectation`, `cvar`, `prob` for models with
-  uncertainty.
+  `set_distribution`, `expectation`, `cvar`, `prob` for models with
+  uncertainty; and `permutation`, `item_at`, `slot_of`, `precede!`,
+  `lookup_table` for deciding an order.
 - [Solving](@ref) — `solve`, `QuicoptError`: send the bytes, read the result.
 
 ## License

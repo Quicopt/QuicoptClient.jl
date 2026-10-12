@@ -20,7 +20,8 @@ const MOI = JuMP.MOI
 import ProtoBuf as PB
 
 export import_model, solve, QuicoptError,
-       set_distribution, set_scenarios, expectation, cvar, prob
+       set_distribution, set_scenarios, expectation, cvar, prob,
+       permutation, item_at, slot_of, precede!, lookup_table, Permutation, LookupTable
 
 include("proto/quicopt/quicopt.jl")   # ProtoBuf.jl-generated Program structs (module quicopt.modeler.v1)
 include("wire.jl")                    # a Program ↔ the bytes the service reads
@@ -30,11 +31,14 @@ include("wire.jl")                    # a Program ↔ the bytes the service read
 
 Operators the client emits — mirrors the service's published operator catalog. The
 server's decoded `Catalog` is the final arbiter; an MOI head outside this set is a
-coverage gap to register service-side, never papered over here. The last four are
-the scenario aggregators of the stochastic layer (see [`set_distribution`](@ref)).
+coverage gap to register service-side, never papered over here. `:smean` to
+`:sfreq_geq` are the scenario aggregators of the stochastic layer (see
+[`set_distribution`](@ref)); `:item_at` and `:slot_of` read a permutation (see
+[`permutation`](@ref)).
 """
 const _CATALOG = Set((:+, :-, :*, :/, :^, :sin, :cos, :exp, :log, :sqrt, :abs,
-                      :max, :min, :smean, :scvar, :sfreq_leq, :sfreq_geq))
+                      :max, :min, :smean, :scvar, :sfreq_leq, :sfreq_geq,
+                      :item_at, :slot_of))
 
 # ── MOI scalar function → Quicopt Expression ─────────────────────────────────
 
@@ -79,9 +83,13 @@ function _expr(f::MOI.ScalarQuadraticFunction, var)
     _sum(terms)
 end
 
-# nonlinear: a symbol-keyed operator tree mapping ~1:1 onto the operator catalog
-_expr(f::MOI.ScalarNonlinearFunction, var) =
+# nonlinear: a symbol-keyed operator tree mapping ~1:1 onto the operator catalog;
+# a permutation's part and a table lookup carry a handle variable, read here
+function _expr(f::MOI.ScalarNonlinearFunction, var)
+    f.head in (:item_at, :slot_of) && return _part(f, var)
+    f.head === :lookup             && return _table(f, var)
     _nl(f.head, _pb.Expression[_expr(a, var) for a in f.args])
+end
 
 """
     _sum(terms) -> Expression
@@ -116,6 +124,57 @@ function _nl(head::Symbol, args::Vector)
         error("operator :$head is not in the Quicopt operator catalog — " *
               "it must be added to the service before importing")
     _apply(head, args)
+end
+
+# ── the leaves: which variable index means what ──────────────────────────────
+
+"""
+    _Leaves
+
+What each variable index of a model stands for, and so how a leaf is emitted:
+a random variable (a source reference), a permutation or lookup table handle
+(readable only through its part operator or indexing), or else a decision
+variable `x{index}`. Called on an index, it returns that leaf's `Expression`.
+"""
+struct _Leaves
+    sources::Dict{MOI.VariableIndex,Pair{Symbol,Any}}
+    permutations::Dict{MOI.VariableIndex,Symbol}
+    tables::Dict{MOI.VariableIndex,Symbol}
+end
+
+function (l::_Leaves)(vi::MOI.VariableIndex)
+    haskey(l.sources, vi) && return _source_ref(l.sources[vi].first)
+    haskey(l.permutations, vi) &&
+        error("the permutation :$(l.permutations[vi]) is read through item_at or slot_of, not used as a number")
+    haskey(l.tables, vi) &&
+        error("the lookup table :$(l.tables[vi]) is read by indexing it, not used as a number")
+    return _var(Symbol("x", vi.value))
+end
+
+"""
+    _part(f, leaves) -> Expression
+
+An `item_at`/`slot_of` node: a whole-number position, then the handle of a
+declared permutation, emitted as the operator over a constant and a structure
+reference.
+"""
+function _part(f::MOI.ScalarNonlinearFunction, l::_Leaves)
+    ok = length(f.args) == 2 && f.args[1] isa Real && isinteger(f.args[1]) &&
+         f.args[2] isa MOI.VariableIndex && haskey(l.permutations, f.args[2])
+    ok || error("$(f.head) reads a permutation declared with permutation(), at a whole-number position")
+    return _apply(f.head, _pb.Expression[_const(f.args[1]), _struct_ref(l.permutations[f.args[2]])])
+end
+
+"""
+    _table(f, leaves) -> Expression
+
+A `:lookup` node: the handle of a declared lookup table, then its index
+expressions, emitted as a table reference.
+"""
+function _table(f::MOI.ScalarNonlinearFunction, l::_Leaves)
+    ok = !isempty(f.args) && f.args[1] isa MOI.VariableIndex && haskey(l.tables, f.args[1])
+    ok || error("a lookup reads a table declared with lookup_table()")
+    return _table_ref(l.tables[f.args[1]], _pb.Expression[_expr(a, l) for a in f.args[2:end]])
 end
 
 # ── variable bounds / integrality from VariableIndex-in-set constraints ──────
@@ -326,14 +385,23 @@ named source declarations instead of decision variables, their uses rewritten to
 source references; the scenario count and seed from [`set_scenarios`](@ref) ride along
 as model data. A model with no stochastic marks emits exactly what it always
 did.
+
+Permutations ([`permutation`](@ref)) and lookup tables ([`lookup_table`](@ref))
+are emitted as structure declarations and parameter tables. Their handle
+variables are not decision variables, and their names must differ from the
+variables' and the random variables'.
 """
 function import_model(m::JuMP.Model)
     b = JuMP.backend(m)
     vis = MOI.get(b, MOI.ListOfVariableIndices())
     st = _stoch(m)
     srcs = st === nothing ? Dict{MOI.VariableIndex,Pair{Symbol,Any}}() : st.sources
+    ss = _structured(m)
+    perms  = ss === nothing ? Dict{MOI.VariableIndex,Symbol}() : Dict(vi => d.name for (vi, d) in ss.permutations)
+    tables = ss === nothing ? Dict{MOI.VariableIndex,Symbol}() : Dict(vi => t.first for (vi, t) in ss.tables)
     varname(vi) = Symbol("x", vi.value)
-    var(vi) = haskey(srcs, vi) ? _source_ref(srcs[vi].first) : _var(varname(vi))
+    var = _Leaves(srcs, perms, tables)
+    handle(vi) = haskey(perms, vi) || haskey(tables, vi)
 
     lo  = Dict(vi => -Inf for vi in vis)
     hi  = Dict(vi =>  Inf for vi in vis)
@@ -342,6 +410,8 @@ function import_model(m::JuMP.Model)
         F === MOI.VariableIndex || continue
         for ci in MOI.get(b, MOI.ListOfConstraintIndices{F,S}())
             vi = MOI.get(b, MOI.ConstraintFunction(), ci)
+            handle(vi) && error("the permutation or lookup table :$(get(perms, vi, get(tables, vi, :?))) " *
+                                "carries bounds or a domain; it is read through its own functions, not constrained directly")
             haskey(srcs, vi) &&
                 error("source :$(srcs[vi].first) carries bounds or a domain — a source " *
                       "is a random variable with a distribution, not a decision variable; " *
@@ -352,7 +422,7 @@ function import_model(m::JuMP.Model)
 
     vars = _pb.VarDecl[]
     for vi in vis
-        haskey(srcs, vi) && continue   # a source is declared, not a decision variable
+        (haskey(srcs, vi) || handle(vi)) && continue   # declared, not a decision variable
         l, u = lo[vi], hi[vi]   # ±Inf passes through: an unbounded direction is the server's to judge
         push!(vars, _pb.VarDecl(name = String(varname(vi)), axes = String[], domain = dom[vi],
                                 lower = _scalarbound(l), upper = _scalarbound(u), start = clamp(0.0, l, u)))
@@ -381,14 +451,24 @@ function import_model(m::JuMP.Model)
         push!(decls, _pb.SourceDecl(name = String(nm), kind = kind))
     end
 
-    _pb.Program(sets = _pb.IndexSet[], indexed_sets = _pb.IndexedSet[], params = _pb.ParamTable[],
+    taken = Set{Symbol}(varname(vi) for vi in vis if !haskey(srcs, vi) && !handle(vi)) ∪
+            Set{Symbol}(d.first for d in values(srcs))
+    for nm in Iterators.flatten((values(perms), values(tables)))
+        nm in taken && error("the name :$nm of a permutation or lookup table is also the name " *
+                             "of a variable in this model; rename one of them")
+    end
+
+    _pb.Program(sets = _pb.IndexSet[], indexed_sets = _pb.IndexedSet[],
+                params = ss === nothing ? _pb.ParamTable[] : _table_params(ss),
                 vars = vars, objective = objective, sense = sense,
                 constraints = cons, fix = _pb.FixEntry[],
                 scenarios = st === nothing ? 0 : UInt64(st.scenarios),
                 scenario_seed = st === nothing ? 0 : UInt64(st.seed),
-                sources = decls)
+                sources = decls,
+                structures = ss === nothing ? _pb.StructureDecl[] : _structure_decls(ss))
 end
 
+include("structured.jl")  # permutations and lookup tables on a JuMP model
 include("transport.jl")   # solve(model) → POST /v1/solve → parsed result
 
 end # module

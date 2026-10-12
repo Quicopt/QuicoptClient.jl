@@ -17,7 +17,7 @@ using .Fixtures
 const OUT = joinpath(@__DIR__, "..", "test", "goldens")
 mkpath(OUT)
 
-for (name, m) in vcat(Fixtures.models(), Fixtures.stochastic_models())
+for (name, m) in vcat(Fixtures.models(), Fixtures.stochastic_models(), Fixtures.structured_models())
     bytes = QuicoptClient.encode(QuicoptClient.import_model(m))
     write(joinpath(OUT, name * ".hex"), bytes2hex(bytes))
     println("wrote ", name, ".hex  (", length(bytes), " bytes)")

@@ -30,6 +30,8 @@ solving.
   is returned as parsed JSON. A non-2xx response raises a `QuicoptError`.
 - **`set_distribution` / `expectation` / `cvar` / `prob`** — say that part of the
   model is uncertain, and optimize over what might happen rather than one guess.
+- **`permutation` / `item_at` / `slot_of` / `precede!` / `lookup_table`** —
+  decide an order, such as a route, and read data at the positions it puts things.
 
 ## Deciding under uncertainty
 
@@ -67,6 +69,33 @@ constraint —
 Using `demand` twice refers to the *same* draw, so independent randomness means
 separate variables. `set_scenarios` is part of the model, not a solver knob: the
 same count and seed always describe the same problem.
+
+## Deciding an order
+
+Some decisions are an arrangement: the order in which a courier visits its stops,
+the order of jobs on a machine. Declare one with `permutation`, read it with
+`item_at` and `slot_of`, and read data along it from a `lookup_table`:
+
+```julia
+using QuicoptClient, JuMP
+
+position = [0, 3, 1, 4, 2]                        # km along the road, stops 1 to 5
+m = Model()
+dist  = lookup_table(m, :dist, [abs(a - b) for a in position, b in position])
+route = permutation(m, :route, 5)                 # 5 stops in 5 visits
+precede!(route, 4, 1)                             # stop 4 is visited before stop 1
+@objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
+
+result = solve(m)
+result.objective                                  # 4.0
+result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in visiting order
+```
+
+`item_at(k, route)` is the stop visited `k`-th and `slot_of(i, route)` the visit
+at which stop `i` comes; both are chosen by the service. Indexing `dist` with them
+reads the distance between the stops it chooses. Driving from one end of the road
+to the other covers the 4 km, and starting at the far end is what visits stop 4
+before stop 1.
 
 ## What travels
 
