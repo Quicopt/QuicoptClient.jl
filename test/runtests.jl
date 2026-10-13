@@ -156,5 +156,68 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
         @test_throws ErrorException QuicoptClient.import_model(mh)              # the handle used as a number
     end
 
+    # Domains with a hole, `active`, `ifelse`, blocks and partitions, checked on
+    # the importer's own structs.
+    @testset "holes, blocks and partitions" begin
+        _pb = QuicoptClient._pb
+        fx = Dict(Fixtures.structured_models())
+        ops(e) = e.node.name === :apply ? vcat([e.node[].op], [ops(a) for a in e.node[].args]...) : String[]
+        hb = QuicoptClient.import_model(fx["holes_blocks"])
+        @test [(v.name, v.domain) for v in hb.vars] ==
+              [("x1", _pb.Domain.SEMIINTEGER), ("x2", _pb.Domain.SEMICONTINUOUS), ("x3", _pb.Domain.BINARY),
+               ("x4", _pb.Domain.INTEGER), ("x5", _pb.Domain.INTEGER)]
+        @test (hb.vars[1].lower.kind[], hb.vars[1].upper.kind[], hb.vars[1].start) == (10.0, 25.0, 0.0)
+        @test [b.name for b in hb.blocks] == ["pair", "supply"]                 # sorted by name
+        @test [m.name for m in hb.blocks[2].members] == ["x1", "x2", "x3"]      # in the order given
+        @test count(==("indicator"), ops(hb.objective)) == 3 && count(==("step"), ops(hb.objective)) == 1
+
+        pt = QuicoptClient.import_model(fx["partition"])
+        d = only(pt.structures)
+        @test (d.name, d.kind, d.size, d.parts, d.start) == ("teams", "partition", 5, 2, [1, 2, 1, 2, 1])
+        @test count(==("part_of"), ops(pt.objective)) == 0                      # inside the lookups
+        @test count(==("size_of"), ops(pt.objective)) == 2
+
+        # ifelse over each comparison: the 0/1 value, then b + (a − b)·t
+        # (inside a JuMP macro, where a comparison of variables is an expression)
+        m = Model(); @variable(m, 0 <= u <= 9); @variable(m, 0 <= w <= 9)
+        objops(m) = ops(QuicoptClient.import_model(m).objective)
+        @objective(m, Min, ifelse(u >= w, 1, 0)); @test objops(m) == ["step", "-"]
+        @objective(m, Min, ifelse(u <= w, 1, 0)); @test objops(m) == ["step", "-"]
+        @objective(m, Min, ifelse(u > w, 1, 0));  @test objops(m) == ["-", "step", "-"]
+        @objective(m, Min, ifelse(u < w, 1, 0));  @test objops(m) == ["-", "step", "-"]
+        @objective(m, Min, ifelse(u == w, 1, 0)); @test objops(m) == ["-", "indicator", "-"]
+        @objective(m, Min, ifelse(u >= 1, 60, 10)); @test "step" in objops(m)
+        @objective(m, Min, ifelse(u, 1, 0))
+        @test_throws ErrorException QuicoptClient.import_model(m)               # not a comparison
+
+        # a hole's set is the variable's bounds, so they must be finite
+        m = Model(); @variable(m, z in Semicontinuous(1.0, Inf)); @objective(m, Min, z)
+        @test_throws ErrorException QuicoptClient.import_model(m)
+
+        # blocks: guardrails at declaration and at import
+        m = Model(); @variable(m, 0 <= v[1:3] <= 1); @variable(m, f >= 0)
+        block(m, :a, v[1:1])
+        @test_throws ErrorException block(m, :a, v[2:2])                        # name taken
+        @test_throws ErrorException block(m, :b, VariableRef[])                 # empty
+        @test_throws ErrorException block(m, :b, [v[2], v[2]])                  # twice
+        @test_throws ErrorException block(m, :b, v)                             # v[1] is in :a
+        other = Model(); @variable(other, 0 <= o <= 1)
+        @test_throws ErrorException block(m, :b, [o])                           # another model
+        block(m, :c, [f]); @objective(m, Min, f)
+        @test_throws ErrorException QuicoptClient.import_model(m)               # f has no upper bound
+
+        # partitions: guardrails
+        m = Model()
+        @test_throws ErrorException partition(m, :p, 0, 2)
+        @test_throws ErrorException partition(m, :p, 3, 1)
+        @test_throws ErrorException partition(m, :p, 3, 2; start = [1, 3, 2])
+        P = partition(m, :p, 3, 2)
+        @test_throws ErrorException permutation(m, :p, 3)                       # name taken
+        @test_throws ErrorException part_of(4, P)
+        @test_throws ErrorException size_of(3, P)
+        @test_throws ErrorException part_of(1.5, P)
+        @test_throws MethodError item_at(1, P)                                  # not a permutation
+    end
+
     include("transport.jl")
 end

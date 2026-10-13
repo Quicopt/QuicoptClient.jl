@@ -98,7 +98,8 @@ end
 """
     structured_models() -> Vector{Pair{String,JuMP.Model}}
 
-Structured fixtures — permutations and lookup tables — kept OUT of
+Structured fixtures — permutations, partitions, lookup tables, domains with a
+hole and blocks — kept OUT of
 [`models`](@ref) for the same reason as the stochastic ones: they lock the wire
 bytes and the importer's handling of handles, and no deterministic solver reads
 them.
@@ -132,6 +133,32 @@ function structured_models()
     price = lookup_table(m, :price, [3.0, 1.0, 4.0, 1.5])
     @objective(m, Min, price[choice])
     push!(out, "lookup_choice" => m)
+
+    # holes and blocks: a semi-integer and a semicontinuous variable, a fee on
+    # the first one's use, a step and a min over sums, a binary, and two blocks
+    m = Model()
+    @variable(m, q in Semiinteger(10, 25))
+    @variable(m, r in Semicontinuous(2.5, 8))
+    @variable(m, s, Bin)
+    @variable(m, 0 <= x[1:2] <= 4, Int)
+    @objective(m, Min, 1.5q + 2r + 30active(q) + 40ifelse(x[1] + x[2] >= 1, 1, 0) -
+                       5min(1, active(q) + active(r)))
+    @constraint(m, q + r >= 12)
+    @constraint(m, 8s - r >= 0)
+    @constraint(m, x[1] + x[2] >= 3)
+    block(m, :supply, [q, r, s])
+    block(m, :pair, x)
+    push!(out, "holes_blocks" => m)
+
+    # a partition with a start, read through a lookup at an item's part and
+    # through the sizes of its parts
+    m = Model()
+    @variable(m, 0 <= y <= 5)
+    cost = lookup_table(m, :cost, [2.0, 0.5])
+    teams = partition(m, :teams, 5, 2; start = [1, 2, 1, 2, 1])
+    @objective(m, Min, cost[part_of(1, teams)] + cost[part_of(3, teams)] +
+                       (size_of(1, teams) - size_of(2, teams))^2 + y)
+    push!(out, "partition" => m)
 
     out
 end

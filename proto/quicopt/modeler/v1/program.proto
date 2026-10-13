@@ -179,6 +179,12 @@ enum Domain {
   CONTINUOUS         = 1;
   INTEGER            = 2;
   BINARY             = 3;
+  // The two domains with a hole: the value is 0 or lies in [lower, upper],
+  // never in between. Both bounds must be finite; when 0 lies inside them the
+  // hole is empty and the variable is an ordinary CONTINUOUS or INTEGER one.
+  // The meaning of MOI's Semicontinuous and Semiinteger sets.
+  SEMICONTINUOUS     = 4;  // 0, or any value in [lower, upper]
+  SEMIINTEGER        = 5;  // 0, or a whole number in [lower, upper]
 }
 
 // A per-variable bound: a scalar, or the name of a per-index Param table to look
@@ -277,11 +283,15 @@ message SourceDecl {
 // A structure is a decision variable with a shape every candidate solution
 // keeps: a permutation of n items over n slots, say. It is declared once under
 // a name, like a source, and its parts are read in expressions through catalog
-// operators tagged struct_part applied to a StructRef: `item_at(slot, P)` is
-// the item in a slot and `slot_of(item, P)` the slot of an item, both
-// decision-valued integers in 1..n. The kind is a catalog key (tag structure),
-// so a later kind is a catalog entry, not a schema change; kinds that do not
-// use a field leave it empty.
+// operators tagged struct_part applied to a StructRef. Two kinds:
+//   permutation  n items over n slots: `item_at(slot, P)` is the item in a
+//                slot and `slot_of(item, P)` the slot of an item, both
+//                decision-valued integers in 1..n;
+//   partition    n items in k parts: `part_of(item, P)` is the part of an item
+//                (in 1..k) and `size_of(part, P)` the number of items in a
+//                part (in 0..n); a part may stay empty.
+// The kind is a catalog key (tag structure). Kinds that do not use a field
+// leave it empty; a field set on a kind that does not use it is refused.
 // ---------------------------------------------------------------------------
 
 // One precedence of a permutation: item `before` sits in an earlier slot than
@@ -294,13 +304,29 @@ message Precedence {
 // One named structure declaration.
 message StructureDecl {
   string            name    = 1;  // "tour"
-  string            kind    = 2;  // "permutation"
-  uint64            size    = 3;  // n >= 2: items 1..n, slots 1..n
-  repeated int64    start   = 4;  // empty, or start[i] = the starting slot of
-                                  // item i (a permutation of 1..n)
+  string            kind    = 2;  // "permutation" | "partition"
+  uint64            size    = 3;  // n: items 1..n (a permutation: n >= 2,
+                                  // slots 1..n; a partition: n >= 1)
+  repeated int64    start   = 4;  // empty, or start[i] = where item i starts:
+                                  // its slot (a permutation of 1..n) or its
+                                  // part (in 1..k)
   bool              fixed   = 5;  // pinned at `start`, which must then be full:
                                   // how a solution is re-evaluated
-  repeated Precedence precede = 6;
+  repeated Precedence precede = 6;  // permutation only
+  uint64            parts   = 7;  // partition only: k >= 2, parts 1..k
+}
+
+// ---------------------------------------------------------------------------
+// Blocks — named groups of variables, one subproblem of the model each
+//
+// A block lists the variables of one subproblem (one customer's supply, one
+// project's staffing). It changes nothing about what the model means. A
+// variable is in at most one block, and a member needs finite bounds.
+// ---------------------------------------------------------------------------
+
+message BlockDecl {
+  string          name    = 1;
+  repeated VarRef members = 2;  // each a declared variable at a concrete index
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +359,12 @@ message Program {
   // A model that uses one carries a StructRef, which an old server rejects, so
   // it is never mis-solved as a plain model.
   repeated StructureDecl structures = 12;
+
+  // Blocks (absent ⇒ none; a Program without them encodes identically with or
+  // without this field). Canonical order: sorted by name. A block never
+  // changes a model's meaning, so an old server that skips the field still
+  // solves the same model.
+  repeated BlockDecl  blocks        = 13;
 }
 
 // ---------------------------------------------------------------------------

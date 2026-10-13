@@ -21,7 +21,8 @@ import ProtoBuf as PB
 
 export import_model, solve, QuicoptError,
        set_distribution, set_scenarios, expectation, cvar, prob,
-       permutation, item_at, slot_of, precede!, lookup_table, Permutation, LookupTable
+       permutation, item_at, slot_of, precede!, lookup_table, Permutation, LookupTable,
+       partition, part_of, size_of, Partition, active, block
 
 include("proto/quicopt/quicopt.jl")   # ProtoBuf.jl-generated Program structs (module quicopt.modeler.v1)
 include("wire.jl")                    # a Program ↔ the bytes the service reads
@@ -33,12 +34,15 @@ Operators the client emits — mirrors the service's published operator catalog.
 server's decoded `Catalog` is the final arbiter; an MOI head outside this set is a
 coverage gap to register service-side, never papered over here. `:smean` to
 `:sfreq_geq` are the scenario aggregators of the stochastic layer (see
-[`set_distribution`](@ref)); `:item_at` and `:slot_of` read a permutation (see
-[`permutation`](@ref)).
+[`set_distribution`](@ref)); `:item_at`, `:slot_of`, `:part_of` and `:size_of`
+read a permutation or a partition (see [`permutation`](@ref),
+[`partition`](@ref)); `:indicator` (1 where its argument is not 0) is what
+[`active`](@ref) writes, and `:step` (1 where its argument is at least 0) is
+what a comparison inside `ifelse` becomes.
 """
 const _CATALOG = Set((:+, :-, :*, :/, :^, :sin, :cos, :exp, :log, :sqrt, :abs,
-                      :max, :min, :smean, :scvar, :sfreq_leq, :sfreq_geq,
-                      :item_at, :slot_of))
+                      :max, :min, :indicator, :step, :smean, :scvar, :sfreq_leq, :sfreq_geq,
+                      :item_at, :slot_of, :part_of, :size_of))
 
 # ── MOI scalar function → Quicopt Expression ─────────────────────────────────
 
@@ -84,11 +88,66 @@ function _expr(f::MOI.ScalarQuadraticFunction, var)
 end
 
 # nonlinear: a symbol-keyed operator tree mapping ~1:1 onto the operator catalog;
-# a permutation's part and a table lookup carry a handle variable, read here
+# a structure's part and a table lookup carry a handle variable, read here, and
+# JuMP's `ifelse` over a comparison becomes the catalog's 0/1 operators
 function _expr(f::MOI.ScalarNonlinearFunction, var)
-    f.head in (:item_at, :slot_of) && return _part(f, var)
-    f.head === :lookup             && return _table(f, var)
+    f.head in (:item_at, :slot_of, :part_of, :size_of) && return _part(f, var)
+    f.head === :lookup                                  && return _table(f, var)
+    f.head === :ifelse                                  && return _ifelse(f, var)
     _nl(f.head, _pb.Expression[_expr(a, var) for a in f.args])
+end
+
+"""
+    _holds(cond, var) -> Expression
+
+The 0/1 value of the comparison `cond` (a `ScalarNonlinearFunction` with head
+`:>=`, `:<=`, `:>`, `:<` or `:==` over two operands) in the catalog's terms:
+`step(e)` is 1 where `e ≥ 0` and `indicator(e)` is 1 where `e ≠ 0`, so
+`a ≥ b` is `step(a - b)`, `a ≤ b` is `step(b - a)`, `a > b` is
+`1 - step(b - a)`, `a < b` is `1 - step(a - b)` and `a == b` is
+`1 - indicator(a - b)`.
+
+# Throws
+- `ErrorException`: for any other condition — `ifelse` imports only a comparison
+  of two expressions.
+"""
+function _holds(cond, var)
+    ok = cond isa MOI.ScalarNonlinearFunction && cond.head in (:>=, :<=, :>, :<, :(==)) &&
+         length(cond.args) == 2
+    ok || error("ifelse needs a comparison (>=, <=, >, <, ==) of two expressions as its condition")
+    a, b = _expr(cond.args[1], var), _expr(cond.args[2], var)
+    cond.head === :>= && return _step(_gap(a, b))
+    cond.head === :<= && return _step(_gap(b, a))
+    cond.head === :>  && return _not(_step(_gap(b, a)))
+    cond.head === :<  && return _not(_step(_gap(a, b)))
+    return _not(_apply(:indicator, _pb.Expression[_gap(a, b)]))
+end
+
+"""    _gap(a, b) -> Expression — the difference `a - b`."""
+_gap(a, b) = _apply(:-, _pb.Expression[a, b])
+"""    _not(t) -> Expression — `1 - t`, the complement of a 0/1 expression."""
+_not(t) = _apply(:-, _pb.Expression[_const(1.0), t])
+"""    _step(e) -> Expression — `step(e)`, 1 where `e ≥ 0` and 0 elsewhere."""
+_step(e) = _apply(:step, _pb.Expression[e])
+
+"""
+    _ifelse(f, var) -> Expression
+
+JuMP's `ifelse(cond, a, b)` as `b + (a - b)·t`, where `t` is the 0/1 value of the
+comparison `cond` ([`_holds`](@ref)). Written for the common case: `ifelse(c, 1, 0)`
+is `t` itself, and with constant branches the coefficient and the offset are
+numbers.
+"""
+function _ifelse(f::MOI.ScalarNonlinearFunction, var)
+    length(f.args) == 3 || error("ifelse takes a condition and two branches")
+    t = _holds(f.args[1], var)
+    a, b = f.args[2], f.args[3]
+    if a isa Real && b isa Real
+        a == 1 && b == 0 && return t
+        return _sum(_pb.Expression[_const(b), _apply(:*, _pb.Expression[_const(a - b), t])])
+    end
+    ea, eb = _expr(a, var), _expr(b, var)
+    return _apply(:+, _pb.Expression[eb, _apply(:*, _pb.Expression[_apply(:-, _pb.Expression[ea, eb]), t])])
 end
 
 """
@@ -138,31 +197,42 @@ variable `x{index}`. Called on an index, it returns that leaf's `Expression`.
 """
 struct _Leaves
     sources::Dict{MOI.VariableIndex,Pair{Symbol,Any}}
-    permutations::Dict{MOI.VariableIndex,Symbol}
+    structures::Dict{MOI.VariableIndex,Pair{Symbol,Symbol}}   # handle => name => kind
     tables::Dict{MOI.VariableIndex,Symbol}
 end
 
 function (l::_Leaves)(vi::MOI.VariableIndex)
     haskey(l.sources, vi) && return _source_ref(l.sources[vi].first)
-    haskey(l.permutations, vi) &&
-        error("the permutation :$(l.permutations[vi]) is read through item_at or slot_of, not used as a number")
+    if haskey(l.structures, vi)
+        nm, kind = l.structures[vi]
+        error("the $kind :$nm is read through $(join(_PARTS[kind], " or ")), not used as a number")
+    end
     haskey(l.tables, vi) &&
         error("the lookup table :$(l.tables[vi]) is read by indexing it, not used as a number")
     return _var(Symbol("x", vi.value))
 end
 
 """
+    _PARTS
+
+The part operators of each structure kind: a permutation is read through
+`item_at` and `slot_of`, a partition through `part_of` and `size_of`.
+"""
+const _PARTS = Dict(:permutation => (:item_at, :slot_of), :partition => (:part_of, :size_of))
+
+"""
     _part(f, leaves) -> Expression
 
-An `item_at`/`slot_of` node: a whole-number position, then the handle of a
-declared permutation, emitted as the operator over a constant and a structure
-reference.
+A part node (`item_at`, `slot_of`, `part_of`, `size_of`): a whole-number
+position, then the handle of a declared structure of the kind that has that
+part, emitted as the operator over a constant and a structure reference.
 """
 function _part(f::MOI.ScalarNonlinearFunction, l::_Leaves)
     ok = length(f.args) == 2 && f.args[1] isa Real && isinteger(f.args[1]) &&
-         f.args[2] isa MOI.VariableIndex && haskey(l.permutations, f.args[2])
-    ok || error("$(f.head) reads a permutation declared with permutation(), at a whole-number position")
-    return _apply(f.head, _pb.Expression[_const(f.args[1]), _struct_ref(l.permutations[f.args[2]])])
+         f.args[2] isa MOI.VariableIndex && haskey(l.structures, f.args[2]) &&
+         f.head in _PARTS[l.structures[f.args[2]].second]
+    ok || error("$(f.head) reads a structure that has it as a part, at a whole-number position")
+    return _apply(f.head, _pb.Expression[_const(f.args[1]), _struct_ref(l.structures[f.args[2]].first)])
 end
 
 """
@@ -194,6 +264,65 @@ _bound!(lo, hi, dom, vi, s::MOI.EqualTo)     = (lo[vi] = hi[vi] = s.value)
 _bound!(lo, hi, dom, vi, s::MOI.Interval)    = (lo[vi] = s.lower; hi[vi] = s.upper)
 _bound!(lo, hi, dom, vi, ::MOI.ZeroOne)      = (dom[vi] = _pb.Domain.BINARY; lo[vi] = max(lo[vi], 0.0); hi[vi] = min(hi[vi], 1.0))
 _bound!(lo, hi, dom, vi, ::MOI.Integer)      = (dom[vi] = _pb.Domain.INTEGER)
+
+"""
+    _hole!(lo, hi, dom, vi, s, boxed)
+
+Give variable `vi` the domain of `s`, a `Semicontinuous` or `Semiinteger` set:
+0, or a value in `[s.lower, s.upper]`, a whole number for `Semiinteger` or when
+the variable is also declared integer. The set's bounds become the variable's,
+so they must be finite, and a variable that also carries a bound constraint
+(`boxed`) is refused: its bounds and the set's range would compete.
+"""
+function _hole!(lo, hi, dom, vi, s::Union{MOI.Semicontinuous,MOI.Semiinteger}, boxed::Bool)
+    what = "variable x$(vi.value) is 0 or in [$(s.lower), $(s.upper)]"
+    boxed && error("$what, and also has a bound; the set's range is its bounds, so leave the bound out")
+    dom[vi] == _pb.Domain.BINARY && error("$what, and is also binary")
+    (isfinite(s.lower) && isfinite(s.upper)) || error("$what; both ends of the range must be finite")
+    lo[vi], hi[vi] = s.lower, s.upper
+    dom[vi] = s isa MOI.Semiinteger || dom[vi] == _pb.Domain.INTEGER ?
+              _pb.Domain.SEMIINTEGER : _pb.Domain.SEMICONTINUOUS
+end
+
+"""
+    _domains(b, vis, srcs, handles) -> (lo, hi, dom)
+
+Each variable's bounds and domain, read off the `VariableIndex`-in-set
+constraints of the MOI backend `b` ([`_bound!`](@ref), [`_hole!`](@ref)). A
+random variable (`srcs`) or a structure or table handle (`handles`) carrying any
+such constraint is refused: it is not a decision variable.
+"""
+function _domains(b, vis, srcs, handles)
+    lo  = Dict(vi => -Inf for vi in vis)
+    hi  = Dict(vi =>  Inf for vi in vis)
+    dom = Dict(vi => _pb.Domain.CONTINUOUS for vi in vis)
+    holes = Dict{MOI.VariableIndex,Any}()
+    boxed = Set{MOI.VariableIndex}()
+    for (F, S) in MOI.get(b, MOI.ListOfConstraintTypesPresent())
+        F === MOI.VariableIndex || continue
+        for ci in MOI.get(b, MOI.ListOfConstraintIndices{F,S}())
+            vi = MOI.get(b, MOI.ConstraintFunction(), ci)
+            haskey(handles, vi) &&
+                error("the permutation, partition or lookup table :$(handles[vi]) carries bounds or a " *
+                      "domain; it is read through its own functions, not constrained directly")
+            haskey(srcs, vi) &&
+                error("source :$(srcs[vi].first) carries bounds or a domain — a source " *
+                      "is a random variable with a distribution, not a decision variable; " *
+                      "declare it with @variable(m, name) and nothing else")
+            set = MOI.get(b, MOI.ConstraintSet(), ci)
+            if set isa Union{MOI.Semicontinuous,MOI.Semiinteger}
+                holes[vi] = set
+            else
+                set isa Union{MOI.GreaterThan,MOI.LessThan,MOI.EqualTo,MOI.Interval} && push!(boxed, vi)
+                _bound!(lo, hi, dom, vi, set)
+            end
+        end
+    end
+    for (vi, set) in holes      # after every other set, so `Integer` is known
+        _hole!(lo, hi, dom, vi, set, vi in boxed)
+    end
+    return lo, hi, dom
+end
 
 # ── function-in-set constraint → Constraint (Zero / Nonneg) ─────────────────
 
@@ -374,7 +503,8 @@ end
 
 Convert a JuMP/MOI model into a Quicopt `Program`. Reads the model at the MOI
 level: each variable becomes a scalar `VarDecl` (`:x{col}`) with its bounds and
-domain; the objective and every constraint become Quicopt expressions
+domain (a `Semicontinuous` or `Semiinteger` set gives the domain with a hole: 0,
+or a value in the set's range); the objective and every constraint become Quicopt expressions
 (`ScalarNonlinearFunction`/affine/quadratic → the expression graph; `EqualTo` →
 `Zero`, `LessThan`/`GreaterThan`/`Interval` → `Nonneg`). The result is a flat
 `Program` (no index sets); ±Inf bounds pass through and mean unbounded in that
@@ -386,10 +516,11 @@ source references; the scenario count and seed from [`set_scenarios`](@ref) ride
 as model data. A model with no stochastic marks emits exactly what it always
 did.
 
-Permutations ([`permutation`](@ref)) and lookup tables ([`lookup_table`](@ref))
-are emitted as structure declarations and parameter tables. Their handle
-variables are not decision variables, and their names must differ from the
-variables' and the random variables'.
+Permutations ([`permutation`](@ref)), partitions ([`partition`](@ref)) and
+lookup tables ([`lookup_table`](@ref)) are emitted as structure declarations and
+parameter tables. Their handle variables are not decision variables, and their
+names must differ from the variables' and the random variables'. Blocks
+([`block`](@ref)) are emitted as block declarations over their members.
 """
 function import_model(m::JuMP.Model)
     b = JuMP.backend(m)
@@ -397,35 +528,22 @@ function import_model(m::JuMP.Model)
     st = _stoch(m)
     srcs = st === nothing ? Dict{MOI.VariableIndex,Pair{Symbol,Any}}() : st.sources
     ss = _structured(m)
-    perms  = ss === nothing ? Dict{MOI.VariableIndex,Symbol}() : Dict(vi => d.name for (vi, d) in ss.permutations)
+    structs = ss === nothing ? Dict{MOI.VariableIndex,Pair{Symbol,Symbol}}() : _structure_kinds(ss)
     tables = ss === nothing ? Dict{MOI.VariableIndex,Symbol}() : Dict(vi => t.first for (vi, t) in ss.tables)
     varname(vi) = Symbol("x", vi.value)
-    var = _Leaves(srcs, perms, tables)
-    handle(vi) = haskey(perms, vi) || haskey(tables, vi)
-
-    lo  = Dict(vi => -Inf for vi in vis)
-    hi  = Dict(vi =>  Inf for vi in vis)
-    dom = Dict(vi => _pb.Domain.CONTINUOUS for vi in vis)
-    for (F, S) in MOI.get(b, MOI.ListOfConstraintTypesPresent())
-        F === MOI.VariableIndex || continue
-        for ci in MOI.get(b, MOI.ListOfConstraintIndices{F,S}())
-            vi = MOI.get(b, MOI.ConstraintFunction(), ci)
-            handle(vi) && error("the permutation or lookup table :$(get(perms, vi, get(tables, vi, :?))) " *
-                                "carries bounds or a domain; it is read through its own functions, not constrained directly")
-            haskey(srcs, vi) &&
-                error("source :$(srcs[vi].first) carries bounds or a domain — a source " *
-                      "is a random variable with a distribution, not a decision variable; " *
-                      "declare it with @variable(m, name) and nothing else")
-            _bound!(lo, hi, dom, vi, MOI.get(b, MOI.ConstraintSet(), ci))
-        end
-    end
+    var = _Leaves(srcs, structs, tables)
+    handles = merge(Dict(vi => nk.first for (vi, nk) in structs), tables)
+    handle(vi) = haskey(handles, vi)
+    lo, hi, dom = _domains(b, vis, srcs, handles)
 
     vars = _pb.VarDecl[]
     for vi in vis
         (haskey(srcs, vi) || handle(vi)) && continue   # declared, not a decision variable
         l, u = lo[vi], hi[vi]   # ±Inf passes through: an unbounded direction is the server's to judge
+        holed = dom[vi] in (_pb.Domain.SEMICONTINUOUS, _pb.Domain.SEMIINTEGER)
         push!(vars, _pb.VarDecl(name = String(varname(vi)), axes = String[], domain = dom[vi],
-                                lower = _scalarbound(l), upper = _scalarbound(u), start = clamp(0.0, l, u)))
+                                lower = _scalarbound(l), upper = _scalarbound(u),
+                                start = holed ? 0.0 : clamp(0.0, l, u)))   # 0 is in a holed domain
     end
 
     sense = MOI.get(b, MOI.ObjectiveSense()) == MOI.MAX_SENSE ? "max" : "min"
@@ -453,9 +571,9 @@ function import_model(m::JuMP.Model)
 
     taken = Set{Symbol}(varname(vi) for vi in vis if !haskey(srcs, vi) && !handle(vi)) ∪
             Set{Symbol}(d.first for d in values(srcs))
-    for nm in Iterators.flatten((values(perms), values(tables)))
-        nm in taken && error("the name :$nm of a permutation or lookup table is also the name " *
-                             "of a variable in this model; rename one of them")
+    for nm in values(handles)
+        nm in taken && error("the name :$nm of a permutation, partition or lookup table is also the " *
+                             "name of a variable in this model; rename one of them")
     end
 
     _pb.Program(sets = _pb.IndexSet[], indexed_sets = _pb.IndexedSet[],
@@ -465,10 +583,11 @@ function import_model(m::JuMP.Model)
                 scenarios = st === nothing ? 0 : UInt64(st.scenarios),
                 scenario_seed = st === nothing ? 0 : UInt64(st.seed),
                 sources = decls,
-                structures = ss === nothing ? _pb.StructureDecl[] : _structure_decls(ss))
+                structures = ss === nothing ? _pb.StructureDecl[] : _structure_decls(ss),
+                blocks = ss === nothing ? _pb.BlockDecl[] : _block_decls(ss, srcs, handles, lo, hi))
 end
 
-include("structured.jl")  # permutations and lookup tables on a JuMP model
+include("structured.jl")  # permutations, partitions, lookup tables and blocks on a JuMP model
 include("transport.jl")   # solve(model) → POST /v1/solve → parsed result
 
 end # module

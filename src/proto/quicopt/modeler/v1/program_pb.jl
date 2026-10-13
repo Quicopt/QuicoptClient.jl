@@ -9,9 +9,9 @@ using ProtoBuf.EnumX: @enumx
 
 export OpDef, SourceRef, Bound, Precedence, IndexElem, Domain, Nonneg, Zero, StructRef
 export Empirical, Catalog, StructureDecl, Index, IndexSet, VarDecl, SetRef, FixEntry
-export ParamRef, VarRef, ParamEntry, IndexedSetFibre, QuantBinding, ParamTable, IndexedSet
-export ParamData, Apply, ConSet, Indicator, Parametric, Reduce, SourceDecl, TableRef
-export Constraint, Expression, Program
+export ParamRef, VarRef, ParamEntry, IndexedSetFibre, QuantBinding, BlockDecl, ParamTable
+export IndexedSet, ParamData, Apply, ConSet, Indicator, Parametric, Reduce, SourceDecl
+export TableRef, Constraint, Expression, Program
 abstract type var"##Abstract#ConSet" end
 abstract type var"##Abstract#TableRef" end
 abstract type var"##Abstract#Constraint" end
@@ -227,7 +227,7 @@ function PB._encoded_size(x::IndexElem)
     return encoded_size
 end
 
-@enumx Domain DOMAIN_UNSPECIFIED=0 CONTINUOUS=1 INTEGER=2 BINARY=3
+@enumx Domain DOMAIN_UNSPECIFIED=0 CONTINUOUS=1 INTEGER=2 BINARY=3 SEMICONTINUOUS=4 SEMIINTEGER=5
 
 struct Nonneg end
 
@@ -373,10 +373,11 @@ struct StructureDecl
     start::Vector{Int64}
     fixed::Bool
     precede::Vector{Precedence}
+    parts::UInt64
 end
-StructureDecl(;name = "", kind = "", size = zero(UInt64), start = Vector{Int64}(), fixed = false, precede = Vector{Precedence}()) = StructureDecl(name, kind, size, start, fixed, precede)
-PB.default_values(::Type{StructureDecl}) = (;name = "", kind = "", size = zero(UInt64), start = Vector{Int64}(), fixed = false, precede = Vector{Precedence}())
-PB.field_numbers(::Type{StructureDecl}) = (;name = 1, kind = 2, size = 3, start = 4, fixed = 5, precede = 6)
+StructureDecl(;name = "", kind = "", size = zero(UInt64), start = Vector{Int64}(), fixed = false, precede = Vector{Precedence}(), parts = zero(UInt64)) = StructureDecl(name, kind, size, start, fixed, precede, parts)
+PB.default_values(::Type{StructureDecl}) = (;name = "", kind = "", size = zero(UInt64), start = Vector{Int64}(), fixed = false, precede = Vector{Precedence}(), parts = zero(UInt64))
+PB.field_numbers(::Type{StructureDecl}) = (;name = 1, kind = 2, size = 3, start = 4, fixed = 5, precede = 6, parts = 7)
 
 function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:StructureDecl}, _endpos::Int=0, _group::Bool=false)
     name = ""
@@ -385,6 +386,7 @@ function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:StructureDecl}, _endpos:
     start = PB.BufferedVector{Int64}()
     fixed = false
     precede = PB.BufferedVector{Precedence}()
+    parts = zero(UInt64)
     while !PB.message_done(d, _endpos, _group)
         field_number, wire_type = PB.decode_tag(d)
         if field_number == 1
@@ -399,11 +401,13 @@ function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:StructureDecl}, _endpos:
             fixed = PB.decode(d, Bool)
         elseif field_number == 6
             PB.decode!(d, precede)
+        elseif field_number == 7
+            parts = PB.decode(d, UInt64)
         else
             Base.skip(d, wire_type)
         end
     end
-    return StructureDecl(name, kind, size, start[], fixed, precede[])
+    return StructureDecl(name, kind, size, start[], fixed, precede[], parts)
 end
 
 function PB.encode(e::PB.AbstractProtoEncoder, x::StructureDecl)
@@ -414,6 +418,7 @@ function PB.encode(e::PB.AbstractProtoEncoder, x::StructureDecl)
     !isempty(x.start) && PB.encode(e, 4, x.start)
     x.fixed != false && PB.encode(e, 5, x.fixed)
     !isempty(x.precede) && PB.encode(e, 6, x.precede)
+    x.parts != zero(UInt64) && PB.encode(e, 7, x.parts)
     return position(e.io) - initpos
 end
 function PB._encoded_size(x::StructureDecl)
@@ -424,6 +429,7 @@ function PB._encoded_size(x::StructureDecl)
     !isempty(x.start) && (encoded_size += PB._encoded_size(x.start, 4))
     x.fixed != false && (encoded_size += PB._encoded_size(x.fixed, 5))
     !isempty(x.precede) && (encoded_size += PB._encoded_size(x.precede, 6))
+    x.parts != zero(UInt64) && (encoded_size += PB._encoded_size(x.parts, 7))
     return encoded_size
 end
 
@@ -821,6 +827,43 @@ function PB._encoded_size(x::QuantBinding)
     return encoded_size
 end
 
+struct BlockDecl
+    name::String
+    members::Vector{VarRef}
+end
+BlockDecl(;name = "", members = Vector{VarRef}()) = BlockDecl(name, members)
+PB.default_values(::Type{BlockDecl}) = (;name = "", members = Vector{VarRef}())
+PB.field_numbers(::Type{BlockDecl}) = (;name = 1, members = 2)
+
+function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:BlockDecl}, _endpos::Int=0, _group::Bool=false)
+    name = ""
+    members = PB.BufferedVector{VarRef}()
+    while !PB.message_done(d, _endpos, _group)
+        field_number, wire_type = PB.decode_tag(d)
+        if field_number == 1
+            name = PB.decode(d, String)
+        elseif field_number == 2
+            PB.decode!(d, members)
+        else
+            Base.skip(d, wire_type)
+        end
+    end
+    return BlockDecl(name, members[])
+end
+
+function PB.encode(e::PB.AbstractProtoEncoder, x::BlockDecl)
+    initpos = position(e.io)
+    !isempty(x.name) && PB.encode(e, 1, x.name)
+    !isempty(x.members) && PB.encode(e, 2, x.members)
+    return position(e.io) - initpos
+end
+function PB._encoded_size(x::BlockDecl)
+    encoded_size = 0
+    !isempty(x.name) && (encoded_size += PB._encoded_size(x.name, 1))
+    !isempty(x.members) && (encoded_size += PB._encoded_size(x.members, 2))
+    return encoded_size
+end
+
 struct ParamTable
     name::String
     entries::Vector{ParamEntry}
@@ -987,6 +1030,7 @@ struct var"##Stub#Program" <: var"##Abstract#Program"
     scenario_seed::UInt64
     sources::Vector{var"##Stub#SourceDecl"{var"##Stub#Expression"}}
     structures::Vector{StructureDecl}
+    blocks::Vector{BlockDecl}
 end
 
 const Apply = var"##Stub#Apply"{var"##Stub#Expression"}
@@ -1393,9 +1437,9 @@ function PB._encoded_size(x::Expression)
 end
 
 const Program = var"##Stub#Program"
-Program(;sets = Vector{IndexSet}(), indexed_sets = Vector{IndexedSet}(), params = Vector{ParamTable}(), vars = Vector{VarDecl}(), objective = nothing, sense = "", constraints = Vector{Constraint}(), fix = Vector{FixEntry}(), scenarios = zero(UInt64), scenario_seed = zero(UInt64), sources = Vector{SourceDecl}(), structures = Vector{StructureDecl}()) = Program(sets, indexed_sets, params, vars, objective, sense, constraints, fix, scenarios, scenario_seed, sources, structures)
-PB.default_values(::Type{Program}) = (;sets = Vector{IndexSet}(), indexed_sets = Vector{IndexedSet}(), params = Vector{ParamTable}(), vars = Vector{VarDecl}(), objective = nothing, sense = "", constraints = Vector{Constraint}(), fix = Vector{FixEntry}(), scenarios = zero(UInt64), scenario_seed = zero(UInt64), sources = Vector{SourceDecl}(), structures = Vector{StructureDecl}())
-PB.field_numbers(::Type{Program}) = (;sets = 1, indexed_sets = 2, params = 3, vars = 4, objective = 5, sense = 6, constraints = 7, fix = 8, scenarios = 9, scenario_seed = 10, sources = 11, structures = 12)
+Program(;sets = Vector{IndexSet}(), indexed_sets = Vector{IndexedSet}(), params = Vector{ParamTable}(), vars = Vector{VarDecl}(), objective = nothing, sense = "", constraints = Vector{Constraint}(), fix = Vector{FixEntry}(), scenarios = zero(UInt64), scenario_seed = zero(UInt64), sources = Vector{SourceDecl}(), structures = Vector{StructureDecl}(), blocks = Vector{BlockDecl}()) = Program(sets, indexed_sets, params, vars, objective, sense, constraints, fix, scenarios, scenario_seed, sources, structures, blocks)
+PB.default_values(::Type{Program}) = (;sets = Vector{IndexSet}(), indexed_sets = Vector{IndexedSet}(), params = Vector{ParamTable}(), vars = Vector{VarDecl}(), objective = nothing, sense = "", constraints = Vector{Constraint}(), fix = Vector{FixEntry}(), scenarios = zero(UInt64), scenario_seed = zero(UInt64), sources = Vector{SourceDecl}(), structures = Vector{StructureDecl}(), blocks = Vector{BlockDecl}())
+PB.field_numbers(::Type{Program}) = (;sets = 1, indexed_sets = 2, params = 3, vars = 4, objective = 5, sense = 6, constraints = 7, fix = 8, scenarios = 9, scenario_seed = 10, sources = 11, structures = 12, blocks = 13)
 
 function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:Program}, _endpos::Int=0, _group::Bool=false)
     sets = PB.BufferedVector{IndexSet}()
@@ -1410,6 +1454,7 @@ function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:Program}, _endpos::Int=0
     scenario_seed = zero(UInt64)
     sources = PB.BufferedVector{SourceDecl}()
     structures = PB.BufferedVector{StructureDecl}()
+    blocks = PB.BufferedVector{BlockDecl}()
     while !PB.message_done(d, _endpos, _group)
         field_number, wire_type = PB.decode_tag(d)
         if field_number == 1
@@ -1436,11 +1481,13 @@ function PB.decode(d::PB.AbstractProtoDecoder, ::Type{<:Program}, _endpos::Int=0
             PB.decode!(d, sources)
         elseif field_number == 12
             PB.decode!(d, structures)
+        elseif field_number == 13
+            PB.decode!(d, blocks)
         else
             Base.skip(d, wire_type)
         end
     end
-    return Program(sets[], indexed_sets[], params[], vars[], objective[], sense, constraints[], fix[], scenarios, scenario_seed, sources[], structures[])
+    return Program(sets[], indexed_sets[], params[], vars[], objective[], sense, constraints[], fix[], scenarios, scenario_seed, sources[], structures[], blocks[])
 end
 
 function PB.encode(e::PB.AbstractProtoEncoder, x::Program)
@@ -1457,6 +1504,7 @@ function PB.encode(e::PB.AbstractProtoEncoder, x::Program)
     x.scenario_seed != zero(UInt64) && PB.encode(e, 10, x.scenario_seed)
     !isempty(x.sources) && PB.encode(e, 11, x.sources)
     !isempty(x.structures) && PB.encode(e, 12, x.structures)
+    !isempty(x.blocks) && PB.encode(e, 13, x.blocks)
     return position(e.io) - initpos
 end
 function PB._encoded_size(x::Program)
@@ -1473,5 +1521,6 @@ function PB._encoded_size(x::Program)
     x.scenario_seed != zero(UInt64) && (encoded_size += PB._encoded_size(x.scenario_seed, 10))
     !isempty(x.sources) && (encoded_size += PB._encoded_size(x.sources, 11))
     !isempty(x.structures) && (encoded_size += PB._encoded_size(x.structures, 12))
+    !isempty(x.blocks) && (encoded_size += PB._encoded_size(x.blocks, 13))
     return encoded_size
 end
