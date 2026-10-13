@@ -32,6 +32,11 @@ solving.
   model is uncertain, and optimize over what might happen rather than one guess.
 - **`permutation` / `item_at` / `slot_of` / `precede!` / `lookup_table`** —
   decide an order, such as a route, and read data at the positions it puts things.
+- **`Semicontinuous` / `Semiinteger` / `active` / `block` / `ifelse`** — a
+  delivery of none or at least a minimum load, a fee per delivery or once a total
+  passes a threshold, and the variables of one subproblem named as a block.
+- **`partition` / `part_of` / `size_of`** — split items into groups, such as
+  people into teams.
 
 ## Deciding under uncertainty
 
@@ -96,6 +101,41 @@ at which stop `i` comes; both are chosen by the service. Indexing `dist` with th
 reads the distance between the stops it chooses. Driving from one end of the road
 to the other covers the 4 km, and starting at the far end is what visits stop 4
 before stop 1.
+
+## Minimum loads, fees and blocks
+
+A delivery is often either nothing or at least a minimum load. JuMP's own
+`Semiinteger(10, 25)` set says so: 0, or a whole number from 10 to 25
+(`Semicontinuous` for any value in the range). `active(x)` is 1 when such a
+variable is not 0, which makes a fee per delivery one term, and `ifelse` over a
+comparison, inside a JuMP macro, charges a fee once a total passes a threshold.
+A `block` names the variables of one subproblem, such as one customer's
+deliveries; every solution returned satisfies the constraints over one block's
+variables alone.
+
+```julia
+using QuicoptClient, JuMP
+
+demand = [40, 30, 20]                             # units, customers 1 to 3
+price = [1 3 4; 3 1 3; 4 2 1]                     # per unit, price[warehouse, customer]
+opening = [60, 50, 40]                            # fee of warehouses 1 to 3
+m = Model()
+@variable(m, ship[1:3, 1:3] in Semiinteger(10, 25))   # every delivery: none, or 10 to 25 units
+for c in 1:3
+    block(m, "customer_$c", ship[:, c])
+    @constraint(m, sum(ship[:, c]) >= demand[c])
+end
+@objective(m, Min, sum(price .* ship) +
+                   sum(5active(ship[w, c]) for w in 1:3, c in 1:3) +            # 5 per delivery
+                   sum(ifelse(sum(ship[w, :]) >= 1, opening[w], 0) for w in 1:3))  # opening fee
+
+result = solve(m)
+result.objective                                  # 300.0: warehouse 2 stays closed
+```
+
+`partition(m, :teams, 6, 2)` splits items into groups the same way a
+`permutation` orders them, read through `part_of(item, teams)` and
+`size_of(part, teams)`; its docstring has a worked example.
 
 ## What travels
 

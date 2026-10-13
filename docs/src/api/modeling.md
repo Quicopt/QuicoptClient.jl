@@ -68,3 +68,40 @@ QuicoptClient.precede!
 QuicoptClient.lookup_table
 QuicoptClient.LookupTable
 ```
+
+## Minimum loads, fees and blocks
+
+A variable declared with JuMP's `Semicontinuous(lower, upper)` or
+`Semiinteger(lower, upper)` set is 0 or within the set's range, and nothing in
+between: a delivery of none, or of at least a minimum load. The range is the
+variable's bounds, so both ends must be finite and the variable carries no other
+bound. [`active`](@ref) is 1 when such a variable is not 0, which turns a fixed
+fee into one term.
+
+A fee due once a total passes a threshold is JuMP's `ifelse` over a comparison,
+written inside a JuMP macro, where a comparison of variables is an expression:
+`ifelse(sum(ship[w, :]) >= 1, opening[w], 0)`. Any of `>=`, `<=`, `>`, `<` and
+`==` works, and `min` and `max` cap or floor an expression in the same spirit.
+
+A [`block`](@ref) names the variables of one subproblem, such as one customer's
+deliveries. Every solution the service returns satisfies the constraints that
+involve only one block's variables.
+
+```@docs
+QuicoptClient.active
+QuicoptClient.block
+```
+
+## Groups
+
+A partition puts each of `n` items into one of `k` parts, both numbered from 1:
+people into teams, jobs onto machines. Its [`part_of`](@ref) is the part an item
+is in and its [`size_of`](@ref) how many items a part holds. The result carries
+both, as `result.structures.<name>.part_of` and `.size_of`.
+
+```@docs
+QuicoptClient.partition
+QuicoptClient.Partition
+QuicoptClient.part_of
+QuicoptClient.size_of
+```
