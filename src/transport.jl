@@ -145,19 +145,63 @@ solve(model::JuMP.Model; source_language::AbstractString = "jump", kwargs...) =
     solve(encode(import_model(model)); source_language = source_language, kwargs...)
 
 """
-    _meta_query(source_language, project) -> String
+    _meta_query(source_language, project, time_limit = nothing) -> String
 
-Build the `?source_language=…&project_id=…` query suffix carrying the optional
-per-call metadata tags (each omitted when empty, values URL-escaped). These ride
-the query string, not the encoded model — the model is the mathematics; these are
-request/billing attributes. Returns `""` when both are empty.
+Build the `?source_language=…&project_id=…&time_limit=…` query suffix carrying
+the optional per-call tags (each omitted when empty or `nothing`, values
+URL-escaped). These ride the query string, not the encoded model — the model is
+the mathematics; these are attributes of the request. Returns `""` when all are
+absent.
 """
-function _meta_query(source_language::AbstractString, project::AbstractString)
+function _meta_query(source_language::AbstractString, project::AbstractString,
+                     time_limit::Union{Nothing,Real} = nothing)
     parts = String[]
     isempty(source_language) || push!(parts, "source_language=" * HTTP.URIs.escapeuri(source_language))
     isempty(project)         || push!(parts, "project_id=" * HTTP.URIs.escapeuri(project))
+    time_limit === nothing   || push!(parts, "time_limit=" * string(Float64(time_limit)))
     isempty(parts) ? "" : "?" * join(parts, "&")
 end
+
+"""
+    _check_time_limit(time_limit) -> Union{Nothing,Float64}
+
+A time limit as sent: `nothing`, or a positive, finite number of seconds.
+
+# Throws
+- `ArgumentError`: for anything else.
+"""
+_check_time_limit(::Nothing) = nothing
+function _check_time_limit(t)
+    t isa Real && !(t isa Bool) && isfinite(t) && t > 0 ||
+        throw(ArgumentError("time_limit is a positive, finite number of seconds, got $(repr(t))"))
+    return Float64(t)
+end
+
+"""
+    _warn_if_lowered(result) -> result
+
+Warn when the service ran a solve for less time than its `time_limit`. The
+service grants at most its maximum and reports what was asked
+(`solver_data.time_limit_s`) beside what was granted
+(`solver_data.time_budget_s`).
+"""
+function _warn_if_lowered(result)
+    sd = get(result, :solver_data, nothing)
+    sd === nothing && return result
+    asked, granted = get(sd, :time_limit_s, nothing), get(sd, :time_budget_s, nothing)
+    if asked !== nothing && granted !== nothing && granted < asked
+        @warn "the service ran this solve for $(_seconds(granted)) s, not the " *
+              "$(_seconds(asked)) s asked for: $(_seconds(granted)) s is the most it grants"
+    end
+    return result
+end
+
+"""
+    _seconds(x) -> String
+
+A number of seconds as written to a person: `120`, not `120.0`.
+"""
+_seconds(x::Real) = isinteger(x) ? string(Int(x)) : string(x)
 
 """
     _auth(tok) -> Vector{Pair{String,String}}
@@ -223,7 +267,7 @@ function _await_job(transport, base_url::AbstractString, job_id::AbstractString,
 end
 
 """
-    solve(bytes; base_url, key, source_language, project, key_path, async, poll, timeout, silent, transport) -> JSON3.Object
+    solve(bytes; base_url, key, source_language, project, time_limit, key_path, async, poll, timeout, silent, transport) -> JSON3.Object
 
 POST an already-encoded model and return the parsed JSON result (`status`,
 `objective`, `feasible`, `solution`, `display`, …). `async=true` submits to
@@ -236,25 +280,39 @@ Otherwise, on the first keyless call the server mints a free key, cached at
 thereafter — including by later runs, so one caller keeps one key. A cached key the
 server rejects is discarded and re-minted once. `source_language` and
 `project` tag the call (which modeling library wrote it; a project label for
-per-project invoicing) — sent as query params, not baked into the model. A
-non-2xx response throws [`QuicoptError`](@ref). `silent=true` suppresses printing
-the result banner.
+per-project invoicing) — sent as query params, not baked into the model.
+
+`time_limit` sets how many seconds the solve may run, in place of the time the
+service would choose: a solver that proves its answer sooner stops sooner, and a
+search, which cannot prove it is done, runs for all of it. The service grants at
+most its maximum (120 s on the free tier), reports both numbers in
+`result.solver_data` (`time_limit_s`, `time_budget_s`), and a warning says so when
+it granted less. With `async=true` the polling `timeout` then defaults to the
+time limit plus a minute, if that is longer than its usual 180 s.
+
+A non-2xx response throws [`QuicoptError`](@ref). `silent=true` suppresses
+printing the result banner.
 """
 function solve(bytes::AbstractVector{UInt8};
                base_url::AbstractString = DEFAULT_BASE_URL,
                key::AbstractString = "",
                source_language::AbstractString = "",
                project::AbstractString = "",
+               time_limit = nothing,
                key_path::AbstractString = _default_key_path(),
-               async::Bool = false, poll::Real = 0.5, timeout::Real = 180.0,
+               async::Bool = false, poll::Real = 0.5, timeout::Union{Nothing,Real} = nothing,
                silent::Bool = false, transport = _http)
+    time_limit = _check_time_limit(time_limit)
+    timeout = timeout !== nothing ? timeout :
+              time_limit === nothing ? 180.0 : max(180.0, time_limit + 60.0)
     # An explicit `key` is used as-is and never persisted; otherwise fall back to
     # the cached free key (minting one on the first keyless call).
     explicit = !isempty(key)
     tok = explicit ? String(key) : _read_key(key_path)
     from_cache = !explicit && !isempty(tok)
 
-    submit_url = string(base_url, async ? "/v1/jobs" : "/v1/solve", _meta_query(source_language, project))
+    submit_url = string(base_url, async ? "/v1/jobs" : "/v1/solve",
+                        _meta_query(source_language, project, time_limit))
     resp, tok = _submit_authenticated(transport, submit_url, bytes, tok, from_cache, key_path)
     resp.status >= 400 && throw(_error(resp))
 
@@ -264,9 +322,9 @@ function solve(bytes::AbstractVector{UInt8};
         silent || @info "minted a free Quicopt key (cached at $key_path)"
     end
 
-    async || return _finish(JSON3.read(resp.body), silent)
+    async || return _warn_if_lowered(_finish(JSON3.read(resp.body), silent))
 
     body = _await_job(transport, base_url, String(JSON3.read(resp.body).job_id),
                       _auth(tok), poll, timeout)
-    return _finish(JSON3.read(body), silent)
+    return _warn_if_lowered(_finish(JSON3.read(body), silent))
 end

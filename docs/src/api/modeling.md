@@ -47,3 +47,24 @@ QuicoptClient.expectation
 QuicoptClient.cvar
 QuicoptClient.prob
 ```
+
+## Orders and lookup tables
+
+A permutation places `n` items in `n` slots, one item per slot, both numbered
+from 1: for a route, the items are the stops and the slots the visits. Its
+[`item_at`](@ref) and [`slot_of`](@ref) are expressions whose values the service
+chooses, and a [`lookup_table`](@ref) indexed with them reads data at the
+positions they pick. The result carries each permutation's arrangement both ways
+round, as `result.structures.<name>.item_at` and `.slot_of`. A model with a
+permutation or a lookup table is solved by a search, so its status is
+`"heuristic"`.
+
+```@docs
+QuicoptClient.permutation
+QuicoptClient.Permutation
+QuicoptClient.item_at
+QuicoptClient.slot_of
+QuicoptClient.precede!
+QuicoptClient.lookup_table
+QuicoptClient.LookupTable
+```

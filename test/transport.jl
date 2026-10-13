@@ -83,6 +83,23 @@ _json(nt) = Vector{UInt8}(JSON3.write(nt))
     solve(m2; key = "ab"^32, silent = true, transport = t4d)
     @test occursin("source_language=jump", t4d.requests[1].url)
 
+    # 4e) time_limit rides the query string; a lowered one warns, a granted one does not
+    timed(asked, granted) = _okbody(solver_data = (; time_limit_s = asked, time_budget_s = granted))
+    t4e = FakeTransport([(; status = 200, api_key = "", body = timed(90.0, 90.0))])
+    r4e = @test_logs solve(b"WIRE"; time_limit = 90, key = "ab"^32, silent = true, transport = t4e)
+    @test occursin("time_limit=90.0", t4e.requests[1].url)
+    @test r4e.solver_data.time_budget_s == 90.0
+    t4f = FakeTransport([(; status = 200, api_key = "", body = timed(300.0, 120.0))])
+    @test_logs (:warn, r"120 s, not the 300 s asked for") solve(b"WIRE"; time_limit = 300,
+        key = "ab"^32, silent = true, transport = t4f)
+    t4g = FakeTransport([(; status = 200, api_key = "", body = _okbody())])
+    solve(b"WIRE"; key = "ab"^32, silent = true, transport = t4g)
+    @test !occursin("time_limit", t4g.requests[1].url)
+    for bad in (0, -1.0, Inf, NaN, true, "10")
+        @test_throws ArgumentError solve(b"WIRE"; time_limit = bad, key = "ab"^32, silent = true,
+                                         transport = FakeTransport([]))
+    end
+
     # ── async ───────────────────────────────────────────────────────────────
     # 5) submit → poll (running → done) → result; minted key replayed on the polls
     keyfile2 = joinpath(mktempdir(), "free_key")

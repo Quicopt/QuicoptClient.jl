@@ -1,6 +1,6 @@
 name = "QuicoptClient"
 uuid = "e3379caf-a7d1-49bc-bad0-a3c1736f44f4"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Tim Bode"]
 
 [deps]

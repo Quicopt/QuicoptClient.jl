@@ -22,7 +22,7 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
 
 @testset "QuicoptClient" begin
     @testset "wire bytes match golden — $name" for (name, m) in
-            vcat(Fixtures.models(), Fixtures.stochastic_models())
+            vcat(Fixtures.models(), Fixtures.stochastic_models(), Fixtures.structured_models())
         golden = joinpath(GOLDENS, name * ".hex")
         @test isfile(golden)
         @test bytes2hex(QuicoptClient.encode(QuicoptClient.import_model(m))) == read(golden, String)
@@ -77,6 +77,83 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
         @test prob(a, ≤, 0).head === prob(a, <=, 0).head === :sfreq_leq
         @test prob(a, ≥, 0).head === :sfreq_geq
         @test_throws ErrorException prob(a, <, 0)
+    end
+
+    # The structured importer, checked on its own structs: a handle never becomes
+    # a decision variable, a part reads its permutation by name, a lookup reads
+    # its table by name, and the declarations carry size, start and precedences.
+    @testset "structured authoring — permutations and lookup tables" begin
+        _pb = QuicoptClient._pb
+        fx = Dict(Fixtures.structured_models())
+
+        # every node of one kind in an expression tree, in depth-first order
+        nodes(e, kind) = e.node.name === kind ? [e.node[]] :
+                         e.node.name === :apply ? reduce(vcat, [nodes(a, kind) for a in e.node[].args]; init = Any[]) :
+                         Any[]
+        # every operator name in an expression tree
+        ops(e) = e.node.name === :apply ? vcat([e.node[].op], [ops(a) for a in e.node[].args]...) : String[]
+
+        route = QuicoptClient.import_model(fx["route"])
+        @test isempty(route.vars)                            # the handles are not decisions
+        @test only(route.structures).name == "route" && only(route.structures).size == 5
+        @test [(p.before, p.after) for p in only(route.structures).precede] == [(4, 1)]
+        @test only(route.params).name == "dist" && length(only(route.params).entries) == 25
+        legs = nodes(route.objective, :table)
+        @test length(legs) == 4 && all(l -> l.param == "dist", legs)
+        part = legs[1].index[1].node[]
+        @test part.op == "item_at" && part.args[1].node[] == 1.0
+        @test part.args[2].node.name === :structure && part.args[2].node[].name == "route"
+
+        assignment = QuicoptClient.import_model(fx["assignment"])
+        @test [v.name for v in assignment.vars] == ["x1"]   # y, declared first
+        @test only(assignment.structures).start == [2, 1, 3]
+        @test "slot_of" in ops(only(assignment.constraints).f)
+
+        choice = QuicoptClient.import_model(fx["lookup_choice"])
+        lookup = choice.objective.node[]
+        @test lookup.param == "price" && lookup.index[1].node.name === :var
+
+        # the bytes round-trip through the generated codec with the declarations intact
+        p2 = PB.decode(PB.ProtoDecoder(IOBuffer(QuicoptClient.encode(route))), _pb.Program)
+        @test only(p2.structures).name == "route" && only(p2.structures).kind == "permutation"
+
+        # a model without them emits none
+        md = Model(); @variable(md, 0 <= z <= 1); @objective(md, Min, z)
+        pd = QuicoptClient.import_model(md)
+        @test isempty(pd.structures) && isempty(pd.params)
+
+        # whole-number indices read the data itself
+        m = Model(); t = lookup_table(m, :t, [1.0 2.0; 3.0 4.0])
+        @test t[2, 1] == 3.0
+
+        # authoring guardrails
+        m = Model()
+        @test_throws ErrorException permutation(m, :p, 1)                       # at least 2 items
+        @test_throws ErrorException permutation(m, :p, 3; start = [1, 1, 2])    # not an arrangement
+        P = permutation(m, :p, 3)
+        @test_throws ErrorException permutation(m, :p, 4)                       # name taken
+        @test_throws ErrorException lookup_table(m, :p, [1.0])                  # across both kinds
+        @test_throws ErrorException item_at(4, P)
+        @test_throws ErrorException slot_of(1.5, P)
+        @test_throws ErrorException precede!(P, 2, 2)
+        precede!(precede!(P, 1, 2), 2, 3)
+        @test_throws ErrorException precede!(P, 3, 1)                           # a cycle
+        @test_throws ErrorException lookup_table(m, :e, Float64[])
+        @test_throws ErrorException lookup_table(m, :n, [1.0, NaN])
+        @test_throws ErrorException t[3, 1]                                     # outside the table
+        @test_throws ErrorException t[1.5, 1]
+
+        ms = Model(); Q = permutation(ms, :q, 3; start = [1, 2, 3]); precede!(Q, 3, 1)
+        @objective(ms, Min, slot_of(1, Q))
+        @test_throws ErrorException QuicoptClient.import_model(ms)              # start breaks a precedence
+
+        mn = Model(); @variable(mn, 0 <= w <= 1); R = permutation(mn, :x1, 2)
+        @objective(mn, Min, w + item_at(1, R))
+        @test_throws ErrorException QuicoptClient.import_model(mn)              # named like a variable
+
+        mh = Model(); H = permutation(mh, :h, 2)
+        @objective(mh, Min, H.handle)
+        @test_throws ErrorException QuicoptClient.import_model(mh)              # the handle used as a number
     end
 
     include("transport.jl")

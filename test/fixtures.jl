@@ -10,7 +10,7 @@ using QuicoptClient   # set_distribution / set_scenarios / aggregators, for the 
 include(joinpath(@__DIR__, "power", "PowerVertical.jl"))
 using .PowerVertical
 
-export models, stochastic_models, three_bus, acopf_jump, acopf_uc_jump
+export models, stochastic_models, structured_models, three_bus, acopf_jump, acopf_uc_jump
 
 """
     models() -> Vector{Pair{String,JuMP.Model}}
@@ -91,6 +91,47 @@ function stochastic_models()
     @objective(m, Min, x + cvar(shock * (50 - x), 0.95))
     @constraint(m, prob(shock * 40 - x, ≤, 0.0) >= 0.75)
     push!(out, "empirical_chance" => m)
+
+    out
+end
+
+"""
+    structured_models() -> Vector{Pair{String,JuMP.Model}}
+
+Structured fixtures — permutations and lookup tables — kept OUT of
+[`models`](@ref) for the same reason as the stochastic ones: they lock the wire
+bytes and the importer's handling of handles, and no deterministic solver reads
+them.
+"""
+function structured_models()
+    out = Pair{String,Model}[]
+
+    # a route: a two-index lookup over item_at, with a precedence
+    position = [0, 3, 1, 4, 2]
+    m = Model()
+    dist = lookup_table(m, :dist, [abs(a - b) for a in position, b in position])
+    route = permutation(m, :route, 5)
+    precede!(route, 4, 1)
+    @objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
+    push!(out, "route" => m)
+
+    # an assignment: slot_of in a lookup weighted by data, a start, a constraint
+    # on a part, and a plain variable beside the structure
+    m = Model()
+    @variable(m, 0 <= y <= 1)
+    distance = lookup_table(m, :distance, [abs(a - b) for a in (0, 1, 3), b in (0, 1, 3)])
+    place = permutation(m, :place, 3; start = [2, 1, 3])
+    flow = [(1, 2) => 2.0, (1, 3) => 5.0, (2, 3) => 1.0]
+    @objective(m, Min, sum(w * distance[slot_of(f, place), slot_of(g, place)] for ((f, g), w) in flow) + y)
+    @constraint(m, slot_of(1, place) <= 2)
+    push!(out, "assignment" => m)
+
+    # a lookup alone: the price of the option an integer variable picks
+    m = Model()
+    @variable(m, 1 <= choice <= 4, Int)
+    price = lookup_table(m, :price, [3.0, 1.0, 4.0, 1.5])
+    @objective(m, Min, price[choice])
+    push!(out, "lookup_choice" => m)
 
     out
 end

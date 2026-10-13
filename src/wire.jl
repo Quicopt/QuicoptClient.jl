@@ -68,6 +68,23 @@ of a subtree never mint independent draws.
 _source_ref(name::Symbol) = _pb.Expression(node = PB.OneOf(:source, _pb.SourceRef(name = String(name))))
 
 """
+    _struct_ref(name) -> Expression
+
+A reference to a declared structure, such as a permutation, by name. It appears
+only as the second argument of the operator reading one of the structure's parts.
+"""
+_struct_ref(name::Symbol) = _pb.Expression(node = PB.OneOf(:structure, _pb.StructRef(name = String(name))))
+
+"""
+    _table_ref(param, index) -> Expression
+
+The entry of the parameter table `param` at positions given by the expressions
+`index` (one or two), read when the model is solved.
+"""
+_table_ref(param::Symbol, index::Vector) =
+    _pb.Expression(node = PB.OneOf(:table, _pb.TableRef(param = String(param), index = index)))
+
+"""
     _iszero(e) -> Bool
 
 Whether expression `e` is the additive-identity constant `Const(0.0)` — the test
