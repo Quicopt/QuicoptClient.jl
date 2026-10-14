@@ -50,8 +50,8 @@ QuicoptClient.prob
 
 ## Orderings and lookup tables
 
-A permutation places `n` items in as many slots, one item per slot, both
-numbered from 1: for a route, the items are the stops and the slots the visits.
+A permutation places items in as many slots, one item per slot, both numbered
+from 1: for a route, the items are the stops and the slots the visits.
 Its [`item_at`](@ref) and [`slot_of`](@ref) are expressions whose values the
 service chooses, and a [`lookup_table`](@ref) indexed with them reads data at the
 positions they pick. The result carries each permutation's arrangement both ways
@@ -94,8 +94,8 @@ QuicoptClient.block
 
 ## Groups
 
-A partition puts each of `n` items into one of `parts` parts, both numbered
-from 1: people into teams, jobs onto machines. Its [`part_of`](@ref) is the part
+A partition puts each item into one of several parts, both numbered from 1:
+people into teams, jobs onto machines. Its [`part_of`](@ref) is the part
 an item is in and its [`size_of`](@ref) how many items a part holds. The result carries
 both, as `result.structures.<name>.part_of` and `.size_of`.
 

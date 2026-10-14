@@ -347,7 +347,7 @@ end
 # below and read by `import_model`.
 mutable struct _Stochastic
     sources::Dict{MOI.VariableIndex,Pair{Symbol,Any}}  # vi => name => spec
-    scenarios::Int                                     # 0 = unset (server default)
+    n_scenarios::Int                                   # 0 = unset (server default)
     seed::Int                                          # 0 = unset (server default)
 end
 _stoch!(m::JuMP.Model) = get!(() -> _Stochastic(Dict{MOI.VariableIndex,Pair{Symbol,Any}}(), 0, 0),
@@ -403,17 +403,17 @@ set_distribution(m::JuMP.Model, v::JuMP.VariableRef, data::AbstractVector{<:Real
     _register_source!(m, v, _source_name(v, name), Float64.(data))
 
 """
-    set_scenarios(model, n; seed = nothing)
+    set_scenarios(model, n_scenarios; seed = nothing)
 
-Set the number of scenarios of the sampled instance (and optionally the draw
-seed, ≥ 1). Both are *model data*: they pin the instance, so two solves of the
-same model see the same draws. Unset values fall back to the server's defaults
-(one scenario; its documented default seed).
+Set the number of scenarios of the sampled instance to `n_scenarios` (and
+optionally the draw seed, ≥ 1). Both are *model data*: they pin the instance, so
+two solves of the same model see the same draws. Unset values fall back to the
+server's defaults (one scenario; its documented default seed).
 """
-function set_scenarios(m::JuMP.Model, n::Integer; seed::Union{Integer,Nothing} = nothing)
-    n ≥ 1 || error("scenarios must be ≥ 1, got $n")
+function set_scenarios(m::JuMP.Model, n_scenarios::Integer; seed::Union{Integer,Nothing} = nothing)
+    n_scenarios ≥ 1 || error("scenarios must be ≥ 1, got $n_scenarios")
     st = _stoch!(m)
-    st.scenarios = Int(n)
+    st.n_scenarios = Int(n_scenarios)
     if seed !== nothing
         seed ≥ 1 || error("scenario seed must be ≥ 1 (0 is reserved for the server default)")
         st.seed = Int(seed)
@@ -580,7 +580,7 @@ function import_model(m::JuMP.Model)
                 params = ss === nothing ? _pb.ParamTable[] : _table_params(ss),
                 vars = vars, objective = objective, sense = sense,
                 constraints = cons, fix = _pb.FixEntry[],
-                scenarios = st === nothing ? 0 : UInt64(st.scenarios),
+                scenarios = st === nothing ? 0 : UInt64(st.n_scenarios),
                 scenario_seed = st === nothing ? 0 : UInt64(st.seed),
                 sources = decls,
                 structures = ss === nothing ? _pb.StructureDecl[] : _structure_decls(ss),
