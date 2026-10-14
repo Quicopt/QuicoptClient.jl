@@ -68,10 +68,10 @@ a deterministic model built on a best guess throws away. See
 [Modeling](@ref) for the full surface: `expectation`, `cvar` for tail risk, and
 `prob` for chance constraints.
 
-## Deciding an order
+## Deciding an ordering
 
-Some decisions are an arrangement: the order in which a courier visits its stops,
-the order of jobs on a machine. Declare one with `permutation`, read it with
+Some decisions are an ordering, such as the stops of a courier's route or the
+jobs on a machine. Declare one with `permutation`, read it with
 `item_at` and `slot_of`, and read data along it from a `lookup_table`:
 
 ```julia
@@ -111,7 +111,7 @@ equivalence, and it is why you compare decoded `Program`s, never raw bytes.
 - [Modeling](@ref) — `import_model`, `encode`: JuMP model → `Program` → bytes;
   `set_distribution`, `expectation`, `cvar`, `prob` for models with
   uncertainty; and `permutation`, `item_at`, `slot_of`, `precede!`,
-  `lookup_table` for deciding an order.
+  `lookup_table` for deciding an ordering.
 - [Solving](@ref) — `solve`, `QuicoptError`: send the bytes, read the result.
 
 ## License

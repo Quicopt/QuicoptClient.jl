@@ -31,7 +31,7 @@ solving.
 - **`set_distribution` / `expectation` / `cvar` / `prob`** — say that part of the
   model is uncertain, and optimize over what might happen rather than one guess.
 - **`permutation` / `item_at` / `slot_of` / `precede!` / `lookup_table`** —
-  decide an order, such as a route, and read data at the positions it puts things.
+  decide an ordering, such as a route, and read data at the positions it puts things.
 - **`Semicontinuous` / `Semiinteger` / `active` / `block` / `ifelse`** — a
   delivery of none or at least a minimum load, a fee per delivery or once a total
   passes a threshold, and the variables of one subproblem named as a block.
@@ -75,10 +75,10 @@ Using `demand` twice refers to the *same* draw, so independent randomness means
 separate variables. `set_scenarios` is part of the model, not a solver knob: the
 same count and seed always describe the same problem.
 
-## Deciding an order
+## Deciding an ordering
 
-Some decisions are an arrangement: the order in which a courier visits its stops,
-the order of jobs on a machine. Declare one with `permutation`, read it with
+Some decisions are an ordering, such as the stops of a courier's route or the
+jobs on a machine. Declare one with `permutation`, read it with
 `item_at` and `slot_of`, and read data along it from a `lookup_table`:
 
 ```julia
@@ -133,9 +133,10 @@ result = solve(m)
 result.objective                                  # 300.0: warehouse 2 stays closed
 ```
 
-`partition(m, :teams, 6, 2)` splits items into groups the same way a
-`permutation` orders them, read through `part_of(item, teams)` and
-`size_of(part, teams)`; its docstring has a worked example.
+`partition(m, :teams, 6, 2)` makes a split of items into groups a decision, the
+way `permutation` makes an ordering one. It is read through
+`part_of(item, teams)` and `size_of(part, teams)`, and its docstring has a
+worked example.
 
 ## What travels
 

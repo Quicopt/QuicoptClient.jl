@@ -84,9 +84,9 @@ end
 """
     Permutation
 
-A permutation declared by [`permutation`](@ref): `n` items placed in `n` slots,
-one item per slot, both numbered from 1. Read it with [`item_at`](@ref) and
-[`slot_of`](@ref); constrain it with [`precede!`](@ref).
+A permutation declared by [`permutation`](@ref): `n` items placed in as many
+slots, one item per slot, both numbered from 1. Read it with [`item_at`](@ref)
+and [`slot_of`](@ref); constrain it with [`precede!`](@ref).
 """
 struct Permutation
     handle::JuMP.VariableRef
@@ -101,10 +101,10 @@ Base.show(io::IO, P::Permutation) =
 """
     permutation(model, name, n; start = nothing) -> Permutation
 
-Declare an order as a decision: `n` items placed in `n` slots, one item per
-slot. For a route the items are the stops and the slots are the visits, so slot
-1 holds the first stop visited; for a machine the items are the jobs and the
-slots the positions in its queue.
+Declare an ordering as a decision: `n` items placed in as many slots, one item
+per slot. For a route the items are the stops and the slots are the visits, so
+slot 1 holds the first stop visited; for a machine the items are the jobs and
+the slots the positions in its queue.
 
 `name` identifies the permutation in the result, as
 `result.structures[name]`. `n` is at least 2. `start` is the arrangement the
@@ -429,9 +429,9 @@ Base.show(io::IO, t::LookupTable) = print(io, "lookup table :", t.name, " (", jo
 
 Declare a table of data that can be indexed by decisions. A model sometimes
 needs a number from a table at a position that is not known yet: the distance
-between the first and the second stop of a route whose order the service is
-still choosing, or the price of an option an integer variable picks. A Julia
-array cannot be indexed this way; the table returned here can.
+between the first and the second stop of a route whose ordering the service
+is still choosing, or the price of an option an integer variable picks. A
+Julia array cannot be indexed this way; the table returned here can.
 
 `values` is a vector (indexed `table[i]`) or a matrix (`table[i, j]`) of numbers,
 none of them `NaN`. Indexing with whole numbers only gives the entry itself;
