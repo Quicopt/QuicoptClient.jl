@@ -131,6 +131,7 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
         @test_throws ErrorException permutation(m, :p, 1)                       # at least 2 items
         @test_throws ErrorException permutation(m, :p, 3; start = [1, 1, 2])    # not an arrangement
         P = permutation(m, :p, 3)
+        @test P.n_items == 3 && sprint(show, P) == "permutation :p (3 items in 3 slots)"
         @test_throws ErrorException permutation(m, :p, 4)                       # name taken
         @test_throws ErrorException lookup_table(m, :p, [1.0])                  # across both kinds
         @test_throws ErrorException item_at(4, P)
@@ -212,6 +213,7 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
         @test_throws ErrorException partition(m, :p, 3, 1)
         @test_throws ErrorException partition(m, :p, 3, 2; start = [1, 3, 2])
         P = partition(m, :p, 3, 2)
+        @test (P.n_items, P.n_parts) == (3, 2) && sprint(show, P) == "partition :p (3 items in 2 parts)"
         @test_throws ErrorException permutation(m, :p, 3)                       # name taken
         @test_throws ErrorException part_of(4, P)
         @test_throws ErrorException size_of(3, P)

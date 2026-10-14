@@ -17,13 +17,13 @@
 """
     _PermutationDecl
 
-One declared permutation: its `name`, its size `n`, the `start` slot of each
-item (empty for the default) and its `(before, after)` precedences in the order
-given.
+One declared permutation: its `name`, its number of items `n_items`, the
+`start` slot of each item (empty for the default) and its `(before, after)`
+precedences in the order given.
 """
 struct _PermutationDecl
     name::Symbol
-    n::Int
+    n_items::Int
     start::Vector{Int}
     precede::Vector{Tuple{Int,Int}}
 end
@@ -31,13 +31,13 @@ end
 """
     _PartitionDecl
 
-One declared partition: its `name`, its `n` items, its number of `parts` and
-the `start` part of each item (empty for the default).
+One declared partition: its `name`, its number of items `n_items`, its number
+of parts `n_parts` and the `start` part of each item (empty for the default).
 """
 struct _PartitionDecl
     name::Symbol
-    n::Int
-    parts::Int
+    n_items::Int
+    n_parts::Int
     start::Vector{Int}
 end
 
@@ -84,32 +84,33 @@ end
 """
     Permutation
 
-A permutation declared by [`permutation`](@ref): `n` items placed in as many
-slots, one item per slot, both numbered from 1. Read it with [`item_at`](@ref)
-and [`slot_of`](@ref); constrain it with [`precede!`](@ref).
+A permutation declared by [`permutation`](@ref): items placed in as many slots,
+one item per slot, both numbered from 1. `P.n_items` is the number of items.
+Read it with [`item_at`](@ref) and [`slot_of`](@ref); constrain it with
+[`precede!`](@ref).
 """
 struct Permutation
     handle::JuMP.VariableRef
     name::Symbol
-    n::Int
+    n_items::Int
 end
 
 Base.broadcastable(P::Permutation) = Ref(P)
 Base.show(io::IO, P::Permutation) =
-    print(io, "permutation :", P.name, " (", P.n, " items in ", P.n, " slots)")
+    print(io, "permutation :", P.name, " (", P.n_items, " items in ", P.n_items, " slots)")
 
 """
-    permutation(model, name, n; start = nothing) -> Permutation
+    permutation(model, name, n_items; start = nothing) -> Permutation
 
-Declare an ordering as a decision: `n` items placed in as many slots, one item
-per slot. For a route the items are the stops and the slots are the visits, so
-slot 1 holds the first stop visited; for a machine the items are the jobs and
+Declare an ordering as a decision: `n_items` items placed in as many slots, one
+item per slot. For a route the items are the stops and the slots are the visits,
+so slot 1 holds the first stop visited; for a machine the items are the jobs and
 the slots the positions in its queue.
 
 `name` identifies the permutation in the result, as
-`result.structures[name]`. `n` is at least 2. `start` is the arrangement the
-service's search starts from: `start[i]` is the slot of item `i`, so it holds
-each of `1:n` once. Left out, item `i` starts in slot `i`.
+`result.structures[name]`. `n_items` is at least 2. `start` is the arrangement
+the service's search starts from: `start[i]` is the slot of item `i`, so it
+holds each of `1:n_items` once. Left out, item `i` starts in slot `i`.
 
 A model with a permutation is solved by a search, so its result has the status
 `"heuristic"`.
@@ -133,26 +134,28 @@ result.objective                                  # 4.0
 result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in the order visited
 ```
 """
-function permutation(m::JuMP.Model, name::Union{Symbol,AbstractString}, n::Integer; start = nothing)
-    n ≥ 2 || error("a permutation has at least 2 items, got $n")
+function permutation(m::JuMP.Model, name::Union{Symbol,AbstractString}, n_items::Integer;
+                     start = nothing)
+    n_items ≥ 2 || error("a permutation has at least 2 items, got $n_items")
     nm = Symbol(name)
     s = start === nothing ? Int[] : collect(start)
-    isempty(s) || (all(x -> x isa Integer, s) && sort(s) == 1:n) ||
-        error("permutation :$nm: start must hold each of 1 to $n once " *
+    isempty(s) || (all(x -> x isa Integer, s) && sort(s) == 1:n_items) ||
+        error("permutation :$nm: start must hold each of 1 to $n_items once " *
               "(start[i] is the slot item i starts in)")
     st, handle = _declare_handle!(m, nm)
-    st.permutations[JuMP.index(handle)] = _PermutationDecl(nm, Int(n), Int.(s), Tuple{Int,Int}[])
-    return Permutation(handle, nm, Int(n))
+    st.permutations[JuMP.index(handle)] = _PermutationDecl(nm, Int(n_items), Int.(s), Tuple{Int,Int}[])
+    return Permutation(handle, nm, Int(n_items))
 end
 
 """
     _position(k, P, what, caller) -> Int
 
-Check that `k`, a slot or an item of `P`, is a whole number in `1:P.n`.
+Check that `k`, a slot or an item of `P`, is a whole number in `1:P.n_items`.
 """
 function _position(k, P::Permutation, what, caller)
     k isa Integer || error("$caller: a $what is a whole number, got $(repr(k))")
-    1 ≤ k ≤ P.n || error("$caller: permutation :$(P.name) has $(what)s 1 to $(P.n), got $k")
+    1 ≤ k ≤ P.n_items ||
+        error("$caller: permutation :$(P.name) has $(what)s 1 to $(P.n_items), got $k")
     return Int(k)
 end
 
@@ -190,21 +193,21 @@ function precede!(P::Permutation, before, after)
     b = _position(after, P, "item", "precede!")
     a == b && error("an item cannot precede itself")
     decl = _structured(JuMP.owner_model(P.handle)).permutations[JuMP.index(P.handle)]
-    _has_cycle(vcat(decl.precede, [(a, b)]), P.n) &&
+    _has_cycle(vcat(decl.precede, [(a, b)]), P.n_items) &&
         error("requiring $a before $b contradicts the requirements already given for :$(P.name)")
     push!(decl.precede, (a, b))
     return P
 end
 
 """
-    _has_cycle(edges, n) -> Bool
+    _has_cycle(edges, n_items) -> Bool
 
-Whether the `(before, after)` requirements over items `1:n` contradict each
-other: Kahn's algorithm leaves an item unplaced exactly when they contain a
+Whether the `(before, after)` requirements over items `1:n_items` contradict
+each other: Kahn's algorithm leaves an item unplaced exactly when they contain a
 cycle.
 """
-function _has_cycle(edges, n::Int)
-    indegree = zeros(Int, n)
+function _has_cycle(edges, n_items::Int)
+    indegree = zeros(Int, n_items)
     for (_, b) in edges
         indegree[b] += 1
     end
@@ -219,7 +222,7 @@ function _has_cycle(edges, n::Int)
             indegree[b] == 0 && push!(ready, b)
         end
     end
-    return placed < n
+    return placed < n_items
 end
 
 # ── partitions ───────────────────────────────────────────────────────────────
@@ -227,31 +230,32 @@ end
 """
     Partition
 
-A partition declared by [`partition`](@ref): `n` items placed in `parts` parts,
-both numbered from 1. Read it with [`part_of`](@ref) and [`size_of`](@ref).
+A partition declared by [`partition`](@ref): items placed in parts, both
+numbered from 1. `P.n_items` is the number of items and `P.n_parts` the number
+of parts. Read it with [`part_of`](@ref) and [`size_of`](@ref).
 """
 struct Partition
     handle::JuMP.VariableRef
     name::Symbol
-    n::Int
-    parts::Int
+    n_items::Int
+    n_parts::Int
 end
 
 Base.broadcastable(P::Partition) = Ref(P)
 Base.show(io::IO, P::Partition) =
-    print(io, "partition :", P.name, " (", P.n, " items in ", P.parts, " parts)")
+    print(io, "partition :", P.name, " (", P.n_items, " items in ", P.n_parts, " parts)")
 
 """
-    partition(model, name, n, parts; start = nothing) -> Partition
+    partition(model, name, n_items, n_parts; start = nothing) -> Partition
 
-Declare a split into groups as a decision: each of `n` items goes into one of
-`parts` parts. The items might be people and the parts teams, or jobs and the
-machines that run them. A part may stay empty.
+Declare a split into groups as a decision: each of `n_items` items goes into one
+of `n_parts` parts. The items might be people and the parts teams, or jobs and
+the machines that run them. A part may stay empty.
 
 `name` identifies the partition in the result, as `result.structures[name]`.
-`n` is at least 1 and `parts` at least 2. `start` is the assignment the
+`n_items` is at least 1 and `n_parts` at least 2. `start` is the assignment the
 service's search starts from: `start[i]` is the part of item `i`, each in
-`1:parts`. Left out, item `i` starts in part `1 + (i - 1) % parts`.
+`1:n_parts`. Left out, item `i` starts in part `1 + (i - 1) % n_parts`.
 
 A model with a partition is solved by a search, so its result has the status
 `"heuristic"`.
@@ -279,18 +283,18 @@ result.structures.teams.size_of                   # [4, 2]: how many players in 
 Players 1 and 3 (7 + 4) make up the team of two, and the other four also add up
 to 11.
 """
-function partition(m::JuMP.Model, name::Union{Symbol,AbstractString}, n::Integer, parts::Integer;
-                   start = nothing)
+function partition(m::JuMP.Model, name::Union{Symbol,AbstractString}, n_items::Integer,
+                   n_parts::Integer; start = nothing)
     nm = Symbol(name)
-    n ≥ 1 || error("partition :$nm needs at least 1 item, got $n")
-    parts ≥ 2 || error("partition :$nm needs at least 2 parts, got $parts")
+    n_items ≥ 1 || error("partition :$nm needs at least 1 item, got $n_items")
+    n_parts ≥ 2 || error("partition :$nm needs at least 2 parts, got $n_parts")
     s = start === nothing ? Int[] : collect(start)
-    isempty(s) || (length(s) == n && all(b -> b isa Integer && 1 ≤ b ≤ parts, s)) ||
-        error("partition :$nm: start must give each of the $n items a part in 1:$parts " *
+    isempty(s) || (length(s) == n_items && all(b -> b isa Integer && 1 ≤ b ≤ n_parts, s)) ||
+        error("partition :$nm: start must give each of the $n_items items a part in 1:$n_parts " *
               "(start[i] is the part item i starts in)")
     st, handle = _declare_handle!(m, nm)
-    st.partitions[JuMP.index(handle)] = _PartitionDecl(nm, Int(n), Int(parts), Int.(s))
-    return Partition(handle, nm, Int(n), Int(parts))
+    st.partitions[JuMP.index(handle)] = _PartitionDecl(nm, Int(n_items), Int(n_parts), Int.(s))
+    return Partition(handle, nm, Int(n_items), Int(n_parts))
 end
 
 """
@@ -304,7 +308,8 @@ number from 1 to the number of items of `P`; broadcast for several, as in
 """
 function part_of(item, P::Partition)
     item isa Integer || error("part_of: an item is a whole number, got $(repr(item))")
-    1 ≤ item ≤ P.n || error("part_of: partition :$(P.name) has items 1 to $(P.n), got $item")
+    1 ≤ item ≤ P.n_items ||
+        error("part_of: partition :$(P.name) has items 1 to $(P.n_items), got $item")
     return JuMP.NonlinearExpr(:part_of, Int(item), P.handle)
 end
 
@@ -317,7 +322,8 @@ from 1 to the number of parts of `P`.
 """
 function size_of(part, P::Partition)
     part isa Integer || error("size_of: a part is a whole number, got $(repr(part))")
-    1 ≤ part ≤ P.parts || error("size_of: partition :$(P.name) has parts 1 to $(P.parts), got $part")
+    1 ≤ part ≤ P.n_parts ||
+        error("size_of: partition :$(P.name) has parts 1 to $(P.n_parts), got $part")
     return JuMP.NonlinearExpr(:size_of, Int(part), P.handle)
 end
 
@@ -506,9 +512,10 @@ The model's partitions as wire declarations: kind `"partition"`, the items as
 `size`, the parts as `parts`, the start one part per item.
 """
 _partition_decls(st::_Structured) =
-    _pb.StructureDecl[_pb.StructureDecl(name = String(d.name), kind = "partition", size = UInt64(d.n),
+    _pb.StructureDecl[_pb.StructureDecl(name = String(d.name), kind = "partition",
+                                        size = UInt64(d.n_items),
                                         start = Int64.(d.start), fixed = false,
-                                        precede = _pb.Precedence[], parts = UInt64(d.parts))
+                                        precede = _pb.Precedence[], parts = UInt64(d.n_parts))
                       for d in values(st.partitions)]
 
 """
@@ -548,7 +555,8 @@ function _permutation_decls(st::_Structured)
             isempty(d.start) || d.start[a] < d.start[b] ||
                 error("permutation :$(d.name): the start places item $a after item $b, which it must precede")
         end
-        push!(decls, _pb.StructureDecl(name = String(d.name), kind = "permutation", size = UInt64(d.n),
+        push!(decls, _pb.StructureDecl(name = String(d.name), kind = "permutation",
+                                       size = UInt64(d.n_items),
                                        start = Int64.(d.start), fixed = false,
                                        precede = _pb.Precedence[_pb.Precedence(before = UInt64(a), after = UInt64(b))
                                                                 for (a, b) in d.precede]))
