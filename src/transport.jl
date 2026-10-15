@@ -284,11 +284,12 @@ per-project invoicing) — sent as query params, not baked into the model.
 
 `time_limit` sets how many seconds the solve may run, in place of the time the
 service would choose: a solver that proves its answer sooner stops sooner, and a
-search, which cannot prove it is done, runs for all of it. The service grants at
-most its maximum (120 s on the free tier), reports both numbers in
-`result.solver_data` (`time_limit_s`, `time_budget_s`), and a warning says so when
-it granted less. With `async=true` the polling `timeout` then defaults to the
-time limit plus a minute, if that is longer than its usual 180 s.
+search, which cannot prove it is done, may stop sooner too, once it stops finding
+better answers. The service grants at most its maximum (120 s on the free tier),
+reports both numbers in `result.solver_data` (`time_limit_s`, `time_budget_s`),
+and a warning says so when it granted less. With `async=true` the polling
+`timeout` then defaults to the time limit plus a minute, if that is longer than
+its usual 180 s.
 
 A non-2xx response throws [`QuicoptError`](@ref). `silent=true` suppresses
 printing the result banner.

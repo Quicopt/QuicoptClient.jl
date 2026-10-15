@@ -179,9 +179,10 @@ automatically.
 
 The service decides how long a solve may run. `solve(m; time_limit = 30)` sets it
 to 30 seconds instead: a solver that proves its answer sooner still stops sooner,
-and a search runs for all of it. The service grants at most its maximum (120 s on
-the free tier) and reports what it granted in `result.solver_data.time_budget_s`;
-a warning says so when that is less than you asked for.
+and a search may stop sooner too, once it stops finding better answers. The
+service grants at most its maximum (120 s on the free tier) and reports what it
+granted in `result.solver_data.time_budget_s`; a warning says so when that is
+less than you asked for.
 
 ## Tests
 
