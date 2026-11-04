@@ -23,7 +23,7 @@ import JSON3
 
 The public Quicopt service endpoint `solve` targets unless a `base_url` is given.
 """
-const DEFAULT_BASE_URL = "https://try.quicoptapi.pgi.fz-juelich.de"
+const DEFAULT_BASE_URL = "https://quicoptapi.pgi.fz-juelich.de"
 
 """
     KEY_PATH_ENV
