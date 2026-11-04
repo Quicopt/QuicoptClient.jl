@@ -26,8 +26,8 @@ solving.
 - **`solve(model)`** — do both and solve it on the service: `POST /v1/solve`
   (or, with `async=true`, the `/v1/jobs` submit-and-poll path — use it for the
   first call against a freshly-started server, whose worker warmup can time out a
-  sync call). A free API key is minted on first use and cached locally; the result
-  is returned as parsed JSON. A non-2xx response raises a `QuicoptError`.
+  sync call). The call carries your API key; the result is returned as parsed
+  JSON. A non-2xx response raises a `QuicoptError`.
 - **`set_distribution` / `expectation` / `cvar` / `prob`** — say that part of the
   model is uncertain, and optimize over what might happen rather than one guess.
 - **`permutation` / `item_at` / `slot_of` / `precede!` / `lookup_table`** —
@@ -54,7 +54,7 @@ set_distribution(m, demand, :normal, 100.0, 15.0)
 set_scenarios(m, 512; seed = 42)
 
 @objective(m, Min, 3stock + 10 * expectation(max(demand - stock, 0)))
-result = solve(m)
+result = solve(m; key = "…")
 ```
 
 This is the newsvendor, and its answer is instructive: it is *not* to stock the
@@ -91,7 +91,7 @@ route = permutation(m, :route, 5)                 # 5 stops in 5 visits
 precede!(route, 4, 1)                             # stop 4 is visited before stop 1
 @objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 4.0
 result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in visiting order
 ```
@@ -129,7 +129,7 @@ end
                    sum(5active(ship[w, c]) for w in 1:3, c in 1:3) +            # 5 per delivery
                    sum(ifelse(sum(ship[w, :]) >= 1, opening[w], 0) for w in 1:3))  # opening fee
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 300.0: warehouse 2 stays closed
 ```
 
@@ -162,20 +162,11 @@ m = Model()
 @objective(m, Max, 3x + 2y)
 @constraint(m, x + y <= 5)
 
-result = solve(m)                      # POSTs to the service; prints the result banner
+result = solve(m; key = "…")           # POSTs to the service; prints the result banner
 @show result.status result.objective result.solution
 ```
 
-The first call mints a free key, cached at `$XDG_CACHE_HOME/quicopt/free_key`
-(`~/.cache/…` by default) and replayed on every later call — including from later
-runs, so you keep one key without doing anything. Where the home directory does not
-survive the run (CI, containers), set `QUICOPT_KEY_PATH` (or `solve(m; key_path =
-"…")`) to durable storage, or every run mints a new key. Target a specific server
-with `solve(m; base_url = "…")`, or use a key you already hold with
-`solve(m; key = "…")` (used as-is, never cached). Tag a call with
-`solve(m; project = "my-project")` to attribute it to a project (per-project
-invoicing when one key serves several); that you wrote it in JuMP is recorded
-automatically.
+The service needs an API key. Register at https://quicopt.com/signup and the key arrives by email. Without a key, the call fails with a message that links to the sign-up page. To keep the key out of your code, set the environment variable `QUICOPT_API_KEY` instead and call `solve(m)`. Target a specific server with `solve(m; base_url = "…")`. Tag a call with `solve(m; project = "my-project")` to attribute it to a project (per-project invoicing when one key serves several); that you wrote it in JuMP is recorded automatically.
 
 The service decides how long a solve may run. `solve(m; time_limit = 30)` sets it
 to 30 seconds instead: a solver that proves its answer sooner still stops sooner,
