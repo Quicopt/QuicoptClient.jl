@@ -31,17 +31,11 @@ m = Model()
 @objective(m, Max, 3x + 2y)
 @constraint(m, x + y <= 5)
 
-result = solve(m)                      # POSTs to the service; prints the result banner
+result = solve(m; key = "…")           # POSTs to the service; prints the result banner
 @show result.status result.objective result.solution
 ```
 
-The first call mints a free API key, cached at `$XDG_CACHE_HOME/quicopt/free_key`
-(`~/.cache/…` by default, `0o600`) and replayed on every later call — including from
-later runs, so one caller keeps one key. Point `QUICOPT_KEY_PATH` at durable storage
-where the home directory does not survive the run (CI, containers), or every run
-mints a new key. Target a specific server with `solve(m; base_url = "…")`,
-and use `async = true` for the first call against a freshly-booted server (its
-worker warmup can time out a synchronous call).
+The service needs an API key. Register at <https://quicopt.com/signup> and the key arrives by email. To keep the key out of your code, set the environment variable `QUICOPT_API_KEY` instead and call `solve(m)`. Target a specific server with `solve(m; base_url = "…")`, and use `async = true` for the first call against a freshly-booted server (its worker warmup can time out a synchronous call).
 
 ## Deciding under uncertainty
 
@@ -59,7 +53,7 @@ set_scenarios(m, 512; seed = 42)
 
 @objective(m, Min, 3stock + 10 * expectation(max(demand - stock, 0)))
 @constraint(m, prob(demand - stock, ≤, 0) >= 0.9)   # meet demand 90% of the time
-result = solve(m)
+result = solve(m; key = "…")
 ```
 
 The answer is *not* to stock the average demand — running out costs more than
@@ -82,7 +76,7 @@ route = permutation(m, :route, 5)                 # 5 stops in 5 visits
 precede!(route, 4, 1)                             # stop 4 is visited before stop 1
 @objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 4.0
 result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in visiting order
 ```

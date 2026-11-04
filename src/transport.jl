@@ -9,11 +9,12 @@
 #     then GET …/result. Use it for the first call against a freshly-booted server:
 #     the worker JIT-warms (~30–60s) before claiming, which can 504 a cold sync call.
 #
-# Keyless on first use: the server mints a key (`X-Quicopt-Api-Key` header), cached
-# at `~/.cache/quicopt/free_key` and replayed as a Bearer token (the standard
-# free-key cache pattern). The HTTP calls sit behind a `transport` seam — `(method, url, headers,
-# body) -> (; status, api_key, body)` — so the mint/cache/poll/parse logic is tested
-# with no network.
+# The caller's own key (`key`, else `ENV[API_KEY_ENV]`) rides as a Bearer token and
+# is never persisted. Without one, a server that issues keys mints one
+# (`X-Quicopt-Api-Key` header), cached at `~/.cache/quicopt/free_key` and replayed
+# as a Bearer token (the standard free-key cache pattern). The HTTP calls sit
+# behind a `transport` seam — `(method, url, headers, body) -> (; status, api_key,
+# body)` — so the mint/cache/poll/parse logic is tested with no network.
 
 import HTTP
 import JSON3
@@ -21,19 +22,36 @@ import JSON3
 """
     DEFAULT_BASE_URL
 
-The public Quicopt service endpoint `solve` targets unless a `base_url` is given.
+The Quicopt service `solve` targets unless a `base_url` is given.
 """
 const DEFAULT_BASE_URL = "https://quicoptapi.pgi.fz-juelich.de"
 
 """
+    API_KEY_ENV
+
+Environment variable `solve` reads your API key from when no `key` is passed. It
+keeps the key out of your code.
+"""
+const API_KEY_ENV = "QUICOPT_API_KEY"
+
+"""
     KEY_PATH_ENV
 
-Environment variable overriding where the free key is cached. Point it at durable
-storage in an environment whose home directory does not survive the run (CI,
-containers), where the default location is wiped between sessions and every run
-would otherwise mint a fresh key.
+Environment variable overriding where `solve` saves a key the server issued
+itself. A server that gives a caller without a key a new one on the first call has
+the client save that key and reuse it in later runs. Point the variable at durable
+storage where the home directory does not survive the run (CI, containers).
 """
 const KEY_PATH_ENV = "QUICOPT_KEY_PATH"
+
+"""
+    _held_key(key) -> String
+
+The key the caller holds: `key` when given, else the value of the environment
+variable [`API_KEY_ENV`](@ref) stripped of surrounding whitespace, else `""`.
+"""
+_held_key(key::AbstractString) =
+    isempty(key) ? String(strip(get(ENV, API_KEY_ENV, ""))) : String(key)
 
 """
     _default_key_path() -> String
@@ -273,14 +291,18 @@ POST an already-encoded model and return the parsed JSON result (`status`,
 `objective`, `feasible`, `solution`, `display`, …). `async=true` submits to
 `/v1/jobs` and polls to completion (use it for the first call against a cold
 server — the worker warmup can 504 a sync call); otherwise it is one `/v1/solve`.
-Pass `key` to authenticate with a specific key you already hold (e.g. a
-distributed internal/test key) — it is used as-is and never written to disk.
-Otherwise, on the first keyless call the server mints a free key, cached at
-`key_path` (`0o600`, see [`KEY_PATH_ENV`](@ref)) and replayed as a Bearer token
-thereafter — including by later runs, so one caller keeps one key. A cached key the
-server rejects is discarded and re-minted once. `source_language` and
-`project` tag the call (which modeling library wrote it; a project label for
-per-project invoicing) — sent as query params, not baked into the model.
+
+The service needs an API key: register at <https://quicopt.com/signup> to receive
+one by email, and pass it as `key`. When `key` is empty, `solve` reads the key from
+the environment variable [`API_KEY_ENV`](@ref), and failing that uses a key saved
+by an earlier run. A key passed or read from the environment is used as-is and
+never written to disk. A server that issues a key on a first call without one has
+it saved at `key_path` (`0o600`, see [`KEY_PATH_ENV`](@ref)) for later runs; a
+saved key the server rejects is discarded and replaced once.
+
+`source_language` and `project` tag the call (which modeling library wrote it; a
+project label for per-project invoicing) — sent as query params, not baked into
+the model.
 
 `time_limit` sets how many seconds the solve may run, in place of the time the
 service would choose: a solver that proves its answer sooner stops sooner, and a
@@ -306,10 +328,12 @@ function solve(bytes::AbstractVector{UInt8};
     time_limit = _check_time_limit(time_limit)
     timeout = timeout !== nothing ? timeout :
               time_limit === nothing ? 180.0 : max(180.0, time_limit + 60.0)
-    # An explicit `key` is used as-is and never persisted; otherwise fall back to
-    # the cached free key (minting one on the first keyless call).
-    explicit = !isempty(key)
-    tok = explicit ? String(key) : _read_key(key_path)
+    # A key the caller holds — passed, or set in the environment — is used as-is,
+    # never persisted and never discarded on a 401; otherwise fall back to the
+    # cached free key (minting one on the first keyless call).
+    held = _held_key(key)
+    explicit = !isempty(held)
+    tok = explicit ? held : _read_key(key_path)
     from_cache = !explicit && !isempty(tok)
 
     submit_url = string(base_url, async ? "/v1/jobs" : "/v1/solve",

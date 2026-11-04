@@ -129,7 +129,7 @@ route = permutation(m, :route, 5)
 precede!(route, 4, 1)                             # stop 4 is visited before stop 1
 @objective(m, Min, sum(dist[item_at(k, route), item_at(k + 1, route)] for k in 1:4))
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 4.0
 result.structures.route.item_at                   # [4, 2, 5, 3, 1]: the stops in the order visited
 ```
@@ -274,7 +274,7 @@ teams = partition(m, :teams, 6, 2)                # 6 players into teams 1 and 2
 @constraint(m, size_of(1, teams) == 4)            # team 1 has four players
 @objective(m, Min, max(total[1], total[2]))
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 11.0
 result.structures.teams.part_of                   # [2, 1, 2, 1, 1, 1]: each player's team
 result.structures.teams.size_of                   # [4, 2]: how many players in each team
@@ -376,7 +376,7 @@ end
 @objective(m, Min, sum(price .* ship) + sum(5active(ship[w, c]) for w in 1:3, c in 1:3) +
                    sum(ifelse(sum(ship[w, :]) >= 1, opening[w], 0) for w in 1:3))
 
-result = solve(m)
+result = solve(m; key = "…")
 result.objective                                  # 300.0
 [result.solution[Symbol("x", index(ship[w, c]).value)] for w in 1:3, c in 1:3]
 # 3×3 Matrix{Float64}:

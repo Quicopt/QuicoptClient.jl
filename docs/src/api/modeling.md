@@ -23,7 +23,7 @@ set_distribution(m, demand, :normal, 100.0, 15.0)
 set_scenarios(m, 512; seed = 42)
 
 @objective(m, Min, 3x + 10 * expectation(max(demand - x, 0)))
-result = solve(m)
+result = solve(m; key = "…")
 ```
 
 Using `demand` twice refers to the *same* draw — one name is one random

@@ -6,6 +6,10 @@
 using QuicoptClient, JuMP, Test
 import JSON3
 
+# A developer's own QUICOPT_API_KEY would make every call below carry that key, so
+# the suite runs as a caller without one.
+delete!(ENV, QuicoptClient.API_KEY_ENV)
+
 mutable struct FakeTransport
     requests::Vector{Any}
     responses::Vector{Any}
@@ -68,6 +72,21 @@ _json(nt) = Vector{UInt8}(JSON3.write(nt))
     @test r4b.objective == 7.0
     @test t4b.requests[1].headers["Authorization"] == "Bearer " * "ab"^32   # explicit key, not the cache
     @test read(keyfile3, String) == "ff"^32                       # cache untouched: explicit key never persisted
+
+    # 4b') a key set in API_KEY_ENV is the caller's own, like an explicit `key`: sent
+    #      as-is and never written to disk. A passed `key` still wins, surrounding
+    #      whitespace is stripped, and a blank variable counts as unset.
+    keyfile3e = joinpath(mktempdir(), "free_key")
+    t4e = FakeTransport([(; status = 200, api_key = "ee"^32, body = _okbody())])
+    withenv(QuicoptClient.API_KEY_ENV => " " * "ac"^32 * "\n") do
+        solve(b"WIRE"; key_path = keyfile3e, silent = true, transport = t4e)
+        @test QuicoptClient._held_key("ab"^32) == "ab"^32
+    end
+    @test t4e.requests[1].headers["Authorization"] == "Bearer " * "ac"^32
+    @test !isfile(keyfile3e)
+    withenv(QuicoptClient.API_KEY_ENV => "   ") do
+        @test QuicoptClient._held_key("") == ""
+    end
 
     # 4c) source_language + project ride the POST query string (metadata, not bytes)
     t4c = FakeTransport([(; status = 200, api_key = "", body = _okbody())])

@@ -7,9 +7,10 @@ QuicoptClient.solve
 QuicoptClient.QuicoptError
 ```
 
-## Where it sends, and where the key lives
+## Server address and API key
 
 ```@docs
 QuicoptClient.DEFAULT_BASE_URL
+QuicoptClient.API_KEY_ENV
 QuicoptClient.KEY_PATH_ENV
 ```
