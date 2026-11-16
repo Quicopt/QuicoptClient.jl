@@ -122,7 +122,18 @@ can differ byte for byte and still mean the same thing — compare decoded
 `Program`s, never raw bytes.
 """
 function encode(prog::_pb.Program)
-    io = IOBuffer()
+    # Each nested message goes on the wire after its length. Into a seekable
+    # `IOBuffer`, ProtoBuf.jl reserves a byte for that length with `truncate`,
+    # writes the message and patches the length in. From Julia 1.12 on, a
+    # `truncate` past the written end copies the whole buffer to new memory even
+    # when it has room, which made encoding quadratic in the model's size: a dense
+    # model of 90,000 terms c·x took minutes. A `PipeBuffer` cannot seek, so
+    # ProtoBuf.jl computes each length before writing its message instead. That
+    # gives the same bytes in linear time (under a second for that model), though
+    # every length is computed again at each level of nesting above it. Up to
+    # Julia 1.11, `truncate` copies only when the buffer is full, so the seekable
+    # path is linear there, and on 1.10 it is about 8 times faster than the pipe.
+    io = VERSION < v"1.12" ? IOBuffer() : PipeBuffer()
     PB.encode(PB.ProtoEncoder(io), prog)
     take!(io)
 end
