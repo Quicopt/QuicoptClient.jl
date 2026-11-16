@@ -28,6 +28,29 @@ const GOLDENS = joinpath(@__DIR__, "goldens")
         @test bytes2hex(QuicoptClient.encode(QuicoptClient.import_model(m))) == read(golden, String)
     end
 
+    # `encode` writes through a seekable `IOBuffer` up to Julia 1.11 and through a
+    # `PipeBuffer` from 1.12 on (the comment in `src/wire.jl` says why). Both
+    # paths must give the same bytes, here on a dense model of 3,600 terms c·x
+    # whose constraints are long enough to need a length of two bytes. On Julia
+    # 1.12 the seekable path copies the whole buffer once per nested message and
+    # allocates over 20,000 bytes per byte written; `encode` allocates under 30 on
+    # 1.10 and 1.12. The bound catches a return to the quadratic path without
+    # timing anything.
+    @testset "encode is linear, and both paths give the same bytes" begin
+        n = 60
+        m = Model()
+        @variable(m, 0 <= x[1:n] <= 1)
+        @objective(m, Min, sum((j % 13 + 1) * x[j] for j in 1:n))
+        for i in 1:n
+            @constraint(m, sum(((i * j) % 97 + 1) * x[j] for j in 1:n) >= i)
+        end
+        prog = QuicoptClient.import_model(m)
+        through(io) = (PB.encode(PB.ProtoEncoder(io), prog); take!(io))
+        bytes = QuicoptClient.encode(prog)
+        @test bytes == through(IOBuffer()) == through(PipeBuffer())
+        @test @allocated(QuicoptClient.encode(prog)) < 1_000 * length(bytes)
+    end
+
     # The stochastic importer rewrite, checked structurally on its own structs:
     # a source never becomes a decision variable, its uses become source
     # references, declarations carry the distribution, and the scenario fields
