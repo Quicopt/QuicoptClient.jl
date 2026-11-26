@@ -1,4 +1,16 @@
-# QuicoptClient.jl
+<p>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Quicopt/QuicoptClient.jl/main/.github/images/quicoptclient-logo-dark.svg">
+    <img alt="QuicoptClient.jl" src="https://raw.githubusercontent.com/Quicopt/QuicoptClient.jl/main/.github/images/quicoptclient-logo.svg" width="240" align="middle">
+  </picture>
+  &emsp;&emsp;
+  <a href="https://quicopt.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Quicopt/QuicoptClient.jl/main/.github/images/quicopt-logo-dark.svg">
+      <img alt="Quicopt" src="https://raw.githubusercontent.com/Quicopt/QuicoptClient.jl/main/.github/images/quicopt-logo.svg" width="300" align="middle">
+    </picture>
+  </a>
+</p>
 
 [![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://quicopt.github.io/QuicoptClient.jl/stable/)
 [![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://quicopt.github.io/QuicoptClient.jl/dev/)
